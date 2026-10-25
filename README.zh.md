@@ -27,6 +27,12 @@
   <a href="https://dshfind.com/zh/plugins/liguobao/ds-harness-remote?ref=badge"><img src="https://dshfind.com/api/badge/liguobao/ds-harness-remote?metric=downloads&amp;lang=zh" alt="dshfind 下载量" width="137" height="20" align="absmiddle"></a>
 </p>
 
+> **本项目是 [liguobao/ds-harness-remote](https://github.com/liguobao/ds-harness-remote) 的通讯加密加强版。**
+> 端到端加密保护的是正文，但 Client 第一次拿到 Host 公钥时，唯一来源仍然是服务器，
+> 首次连接就可能被引到服务端自己持有的 key 上。本仓库堵掉这个口子：Host 先带外核对手机身份，
+> 确认之前一个业务帧都不放行；只从服务端学到过 key 的 peer 一律拒绝；
+> 服务器下发的描述符永远无法覆盖本地已固定的 identity。
+
 远程模式支持官方插件页的列表、配置和启用/停用（需更新 Host Remote 插件）。Remote 自身仍只能在 Host 本地配置和启停；不开放远程安装、卸载。
 
 ## 一次连接，随时可用。
@@ -233,7 +239,7 @@ identity key 校验。服务端可以协调连接并看到必要的网络元数�
 工具输出、Workspace 路径或 远端文件内容。握手、密钥生命周期、可见元数据、重放保护和
 安全边界详见[端到端加密](docs/end-to-end-encryption.md)。
 
-### 设备配对（可选，推荐开启）
+### 设备配对（默认强制）
 
 服务端是公钥的唯一来源，因此它理论上可以在首次连接时替换公钥完成中间人。配对用两个
 带外通道消除这个可能：
@@ -243,8 +249,10 @@ identity key 校验。服务端可以协调连接并看到必要的网络元数�
 3. 在本机输入 `/remote pair confirm <确认码>`。
 
 确认码由双方公钥和一次性 nonce 派生，比对通过后双方公钥被本地固定，此后服务器无法替换。
-设置页的「配对 Controller」提供同样的界面。把 `identity.requireVerifiedPeer` 设为 `true`
-后，未配对设备一律无法连接。设计见[最小安全通道](docs/design/minimal-secure-channel.md)。
+设置页的「配对 Controller」提供同样的界面，手机上会一直显示确认码直到 Host 确认。
+`identity.requireVerifiedPeer` 默认就是 `true`：未配对设备在 Host 屏幕上确认之前，一个业务帧
+都不会被放行；只有显式设为 `false` 才会退回旧行为。设计见
+[最小安全通道](docs/design/minimal-secure-channel.md)。
 
 ## 网络与传输
 

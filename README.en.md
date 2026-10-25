@@ -27,6 +27,14 @@
   <a href="https://dshfind.com/zh/plugins/liguobao/ds-harness-remote?ref=badge"><img src="https://dshfind.com/api/badge/liguobao/ds-harness-remote?metric=downloads&amp;lang=zh" alt="dshfind downloads" width="137" height="20" align="absmiddle"></a>
 </p>
 
+> **Hardened fork of [liguobao/ds-harness-remote](https://github.com/liguobao/ds-harness-remote).**
+> End-to-end encryption protects the payload, but the relay service is still the only
+> place a Client can learn a Host's public key, so a first connection could be diverted
+> to a key the service controls. This fork closes that: the Host verifies the Controller
+> out of band before it accepts a single business frame, refuses any peer whose key was
+> only ever learned from the service, and never lets a server descriptor replace a pinned
+> identity.
+
 Remote mode supports the official plugin page for listing, configuration, and enabling/disabling plugins (requires an updated Host Remote plugin). Remote itself remains locally managed on the Host; remote installation and removal are not exposed.
 
 ## Connect once. Ready whenever you are.
@@ -234,7 +242,7 @@ network metadata, but it cannot read session messages, prompts, tool output, wor
 remote file contents. See [End-to-end encryption](docs/end-to-end-encryption.md) for the handshake,
 key lifecycle, visible metadata, replay protection, and security limits.
 
-### Device pairing (optional, recommended)
+### Device pairing (required by default)
 
 The service is the only source of peer public keys, so on its own it could substitute a key during
 the first connection and sit in the middle. Pairing removes that with two out-of-band channels:
@@ -245,8 +253,10 @@ the first connection and sit in the middle. Pairing removes that with two out-of
 
 The code is derived from both public keys and a single-use nonce, so a matching code can only come
 from that exact key pair. After pairing, both keys stay pinned locally and the service cannot
-replace them. The same flow is available from the "Pair a Controller" panel in settings. Set
-`identity.requireVerifiedPeer` to `true` to refuse every unpaired device. See
+replace them. The same flow is available from the "Pair a Controller" panel in settings, and the phone keeps
+the code on screen until the Host confirms it. `identity.requireVerifiedPeer` defaults to `true`:
+an unpaired device cannot open a tunnel until the operator confirms it on the Host screen, and
+`false` is only for a deliberate opt-out. See
 [Minimal secure channel](docs/design/minimal-secure-channel.md).
 
 ## Network and transport

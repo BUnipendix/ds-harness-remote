@@ -27,6 +27,12 @@
   <a href="https://dshfind.com/zh/plugins/liguobao/ds-harness-remote?ref=badge"><img src="https://dshfind.com/api/badge/liguobao/ds-harness-remote?metric=downloads&amp;lang=zh" alt="dshfind ダウンロード数" width="137" height="20" align="absmiddle"></a>
 </p>
 
+> **[liguobao/ds-harness-remote](https://github.com/liguobao/ds-harness-remote) の通信暗号化を強化した版です。**
+> エンドツーエンド暗号化が守るのは本文だけで、クライアントが最初に Host の公開鍵を知る手段は
+> リレーサービスしかありません。つまり初回接続だけは、サービスが自分の鍵にすり替える余地が残ります。
+> このリポジトリはそこを塞ぎます。Host は業務フレームを 1 つも通す前にコントローラーを帯外で確認し、
+> サービス経由でしか知らない鍵の相手を拒否し、固定済みの identity をサーバーの記述子で上書きさせません。
+
 Remote モードでは、公式プラグイン画面で一覧の表示、設定、有効化・無効化ができます（Host 側の Remote プラグインを更新する必要があります）。Remote 自体の管理は引き続き Host 上でのみ行います。リモートからのインストール・削除には対応していません。
 
 ## 一度つなげば、いつでも使える
