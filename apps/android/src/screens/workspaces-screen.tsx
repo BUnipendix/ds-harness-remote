@@ -29,6 +29,16 @@ const FAVORITE_HIGHLIGHT_MS = 2400
 const DIRECTORY_SHEET_COMPACT_RATIO = 0.92
 const DIRECTORY_SHEET_RATIO = 0.75
 
+/**
+ * How many workspace groups mount in the first frame.
+ *
+ * Every group renders five react-native-svg icons plus its session rows, so a
+ * long list builds hundreds of native views in one commit and the UI thread
+ * visibly stalls (~350 ms on a mid-range phone). Growing the window over the
+ * next frames keeps the first screen under one frame budget.
+ */
+const WORKSPACE_RENDER_BATCH = 8
+
 export function WorkspacesScreen({ onBack, onOpenDevices, onSession, onDeviceInfo, onMore, focusWorkspaceKey, botMode = false, botConversationId, onBotMode, onSelectBot }: {
   botMode?: boolean
   botConversationId?: string
@@ -165,6 +175,9 @@ export function WorkspacesScreen({ onBack, onOpenDevices, onSession, onDeviceInf
     const offset = workspaceOffsets.current.get(key)
     if (offset === undefined) {
       pendingScrollKey.current = key
+      // The target may still sit past the mounted window: render the rest so
+      // its onLayout can report an offset to scroll to.
+      setRenderBudget(filteredWorkspaces.length)
       return
     }
     scrollRef.current?.scrollTo({ y: Math.max(0, offset - spacing.sm), animated: true })
@@ -291,6 +304,17 @@ export function WorkspacesScreen({ onBack, onOpenDevices, onSession, onDeviceInf
         workspace.title,
         workspace.path,
       ].some(value => value.toLocaleLowerCase().includes(normalizedSearchQuery)))
+  // Grow the mounted window a batch per frame so the first paint stays cheap.
+  const [renderBudget, setRenderBudget] = useState(WORKSPACE_RENDER_BATCH)
+  useEffect(() => {
+    if (renderBudget >= filteredWorkspaces.length) return
+    const frame = requestAnimationFrame(() => {
+      setRenderBudget(current => current + WORKSPACE_RENDER_BATCH)
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [renderBudget, filteredWorkspaces.length])
+  // A new search starts a new list; a jump target needs its row to exist.
+  useEffect(() => { setRenderBudget(WORKSPACE_RENDER_BATCH) }, [normalizedSearchQuery, activeBackend])
   const actionsIndex = actionsTarget === undefined
     ? -1
     : manageableWorkspaces.findIndex(item => item.workspaceId === actionsTarget.workspaceId)
@@ -488,7 +512,7 @@ export function WorkspacesScreen({ onBack, onOpenDevices, onSession, onDeviceInf
                   body={zhCN.workspaces.noSearchResultsBody}
                   action={<Button label={zhCN.workspaces.clearSearch} variant="secondary" onPress={() => setSearchQuery('')} />}
                 />
-              : <View>{filteredWorkspaces.map(workspace => {
+              : <View>{filteredWorkspaces.slice(0, renderBudget).map(workspace => {
                 const workspaceSessions = getVisibleWorkspaceSessions(workspace, sessions, archivedSessionIds)
                 const workspaceKey = workspaceStableKey(workspace, selectedDevice?.platform)
                 const showAllSessions = allSessionsWorkspaceKeys.has(workspaceKey)
