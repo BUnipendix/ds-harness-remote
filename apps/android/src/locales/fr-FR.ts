@@ -1,6 +1,26 @@
 import type { Messages } from './types'
 
 const frFR = {
+  pairing: {
+    pinned: "Clé de l'hôte enregistrée",
+    confirmOnComputer: "Confirmez l'association sur l'ordinateur",
+    title: "Associer un appareil",
+    hint: "Scannez le QR code affiché sur l'ordinateur",
+    wrongDevice: 'Ce code appartient à un autre appareil. Scannez à nouveau.',
+    errorExpired: "Ce code a expiré. Générez-en un nouveau sur l'ordinateur.",
+    errorInvalid: "Ce n'est pas un code valide. Visez le code affiché sur l'ordinateur.",
+    errorSas: 'Les codes ne correspondent pas. Comparez-les à nouveau.',
+    hintFor: (name: string) => `Scannez le code affiché sur ${name}`,
+    permission: "L'accès à la caméra est nécessaire pour scanner le code",
+    grant: "Autoriser la caméra",
+    codeTitle: "Comparez ce code avec celui de l'ordinateur",
+    matched: "Codes identiques — associé",
+    failed: "Échec de l'association",
+    retry: "Scanner à nouveau",
+    connect: "Se connecter au PC",
+    connecting: "Connexion…",
+    done: "Terminé",
+  },
   bots: {
     btw: "Side question",
     btwHint: "Use /btw to ask without interrupting or adding to the Bot’s context.",
@@ -110,6 +130,7 @@ const frFR = {
     cacheRestoreFailed: "Impossible de restaurer les préférences de navigation. L'historique en ligne est toujours disponible.",
     conversationMissing: "Cette conversation n'est plus disponible sur l'hôte actuel.",
     unknownHost: "L'hôte de notification n'est pas un appareil approuvé pour le compte actuel.",
+    pairFirst: "Cet ordinateur n'est pas encore appairé. Scannez d'abord son code.",
     starred: "Conversations préférées",
     running: "En cours",
     recent: "Consultations récentes",
@@ -225,8 +246,8 @@ const frFR = {
   },
   devices: {
     rename: "Rebaptiser", renameTitle: "Renommer l'appareil", namePlaceholder: "Entrez un nom d'appareil", saveName: "Sauvegarder", renameHint: "Le nouveau nom est partagé dans les listes d’appareils de votre compte.",
-    title: "Appareils", myDevices: "Mes appareils", lead: "Choisissez un appareil pour continuer votre travail", footer: "Continuez votre travail à tout moment.", favorites: "Favoris", recent: "Récemment visité", openFavorite: (title: string, device: string) => `Ouvrez « ${title} » sur ${device} à partir des favoris`, openRecent: (title: string, device: string) => `Ouvert récemment visité « ${title} » sur ${device}`, removeFavorite: (title: string) => `Supprimer « ${title} » des favoris`, emptyTitle: "Aucun appareil disponible", emptyBody: "Installez le plugin DSH Remote sur votre ordinateur et connectez-vous au même compte. L'appareil apparaîtra ici.", options: "Gérer l'appareil", encrypted: "Connexion sécurisée",
-    connectionInterrupted: "Connexion interrompue", trustExplanation: "Après confirmation, ce téléphone mémorise l’identité sécurisée de l’appareil. Si cette identité change, la connexion s'arrête pour protéger vos données.", trust: "Faites confiance et continuez", connectReady: "Connectez-vous pour afficher et poursuivre les conversations sur votre ordinateur.", offlineHelp: "Cet appareil est hors ligne. Assurez-vous que le plugin DSH Remote est en cours d'exécution sur votre ordinateur.", secureConnect: "Connectez-vous en toute sécurité",
+    title: "Appareils", myDevices: "Mes appareils", lead: "Choisissez un appareil pour continuer votre travail", detailHint: 'Appui long pour les détails et le réappairage', footer: "Continuez votre travail à tout moment.", favorites: "Favoris", recent: "Récemment visité", openFavorite: (title: string, device: string) => `Ouvrez « ${title} » sur ${device} à partir des favoris`, openRecent: (title: string, device: string) => `Ouvert récemment visité « ${title} » sur ${device}`, removeFavorite: (title: string) => `Supprimer « ${title} » des favoris`, emptyTitle: "Aucun appareil disponible", emptyBody: "Installez le plugin DSH Remote sur votre ordinateur et connectez-vous au même compte. L'appareil apparaîtra ici.", options: "Gérer l'appareil", encrypted: "Connexion sécurisée",
+    connectionInterrupted: "Connexion interrompue", trustExplanation: "Après confirmation, ce téléphone mémorise l’identité sécurisée de l’appareil. Si cette identité change, la connexion s'arrête pour protéger vos données.", badgePaired: 'Appairé', badgePending: 'En attente', badgeUnpaired: 'Non appairé', pairPendingExplanation: "La clé de cet ordinateur est déjà enregistrée. Confirmez le code sur l'ordinateur, puis continuez ici.", pairExplanation: "Cet appareil n'est pas encore appairé avec ce téléphone. Générez un code sur l'ordinateur, scannez-le ici et confirmez le même code sur les deux écrans.", repair: 'Réappairer', pairNow: 'Scanner pour appairer', trust: "Faites confiance et continuez", connectReady: "Connectez-vous pour afficher et poursuivre les conversations sur votre ordinateur.", offlineHelp: "Cet appareil est hors ligne. Assurez-vous que le plugin DSH Remote est en cours d'exécution sur votre ordinateur.", secureConnect: "Connectez-vous en toute sécurité",
     connectingTitle: "Connecter l'appareil", connecting: "De liaison", connectionReady: "Prêt", retryConnection: "Connectez-vous à nouveau", cancelConnection: "Annuler la connexion", openInfo: "Afficher les informations sur l'appareil et la connexion",
     connectionProbeLabels: {
       lan: "Sonder le chemin direct local",

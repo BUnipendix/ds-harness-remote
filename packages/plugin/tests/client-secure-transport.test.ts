@@ -108,6 +108,7 @@ describe('ClientSecureTransport', () => {
       publicKey: hostKeys.publicKey,
       fingerprint: 'HOST',
       trustedAt: 1,
+      verification: 'pairing',
       membershipId: 'membership-1',
     }
     const hostNoise = new NoiseIkSession({
@@ -183,6 +184,7 @@ function secureTransportFixture(): { secure: ClientSecureTransport; wire: HostLo
     publicKey: hostKeys.publicKey,
     fingerprint: 'HOST',
     trustedAt: 1,
+    verification: 'pairing',
     membershipId: 'membership-1',
   }
   const hostNoise = new NoiseIkSession({

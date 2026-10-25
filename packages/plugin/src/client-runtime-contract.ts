@@ -119,6 +119,11 @@ export interface HostConnectionHandle {
 }
 
 export interface HostAuthorizationControl {
+  /** Open a local pairing offer; the URI is shown on this device only. */
+  beginPairing?(options?: { ttlMs?: number }): { uri: string; expiresAt: number }
+  pendingPairing?(): { peerDeviceId: string; code: string; attemptsLeft: number; expiresAt: number } | undefined
+  confirmPairing?(code: string): Promise<{ status: 'pinned'; peerDeviceId: string }>
+  cancelPairing?(): void
   setAgentBackends?(config: ResolvedConfig): Promise<void>
   setTerminalEnabled?(enabled: boolean): void
   setLoopbackPorts?(ports: readonly number[]): void

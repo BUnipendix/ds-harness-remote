@@ -1,4 +1,24 @@
 const zhCN = {
+  pairing: {
+    pinned: "已保存这台电脑的公钥",
+    confirmOnComputer: "请在电脑上核对并确认配对",
+    title: "配对设备",
+    hint: "扫描电脑上显示的二维码",
+    wrongDevice: '扫到的不是这台设备，请重新扫描',
+    errorExpired: '配对码已过期，请在电脑上重新生成',
+    errorInvalid: '这不是有效的配对码，请对准电脑上的二维码',
+    errorSas: '确认码不一致，请重新比对',
+    hintFor: (name: string) => `扫描 ${name} 上显示的二维码`,
+    permission: "需要相机权限才能扫描配对码",
+    grant: "授予相机权限",
+    codeTitle: "与电脑屏幕上的确认码逐位核对",
+    matched: "两码一致，已配对",
+    failed: "配对失败",
+    retry: "重新扫描",
+    connect: "连接电脑",
+    connecting: "正在连接电脑…",
+    done: "完成",
+  },
   bots: {
     btw: "旁问",
     btwHint: "输入 /btw 提问，不打断任务，也不加入 Bot 上下文。",
@@ -108,6 +128,7 @@ const zhCN = {
     cacheRestoreFailed: "本机浏览状态未能恢复，联网历史不受影响。",
     conversationMissing: "这条对话已不在当前主机的可用列表中。",
     unknownHost: "通知对应的主机不在当前账号的已信任设备中。",
+    pairFirst: '这台电脑还没有配对，请先扫码配对。',
     starred: "收藏对话",
     running: "进行中",
     recent: "最近访问",
@@ -223,8 +244,8 @@ const zhCN = {
   },
   devices: {
     rename: '重命名', renameTitle: '修改设备名称', namePlaceholder: '输入设备名称', saveName: '保存', renameHint: '新名称会同步到账号下的设备列表。',
-    title: '设备', myDevices: '我的设备', lead: '选择一台设备，继续你的工作', footer: '随时继续你的工作。', favorites: '收藏夹', recent: '最近访问', openFavorite: (title: string, device: string) => `打开收藏夹中 ${device} 上的“${title}”`, openRecent: (title: string, device: string) => `打开最近访问的“${title}”（${device}）`, removeFavorite: (title: string) => `从收藏夹移除“${title}”`, emptyTitle: '还没有可用设备', emptyBody: '在电脑上安装 DSH Remote 插件并登录同一账号，设备就会出现在这里。', options: '管理设备', encrypted: '安全连接',
-    connectionInterrupted: '连接已断开', trustExplanation: '确认后，此手机会记住这台设备的安全身份。如果身份发生变化，将停止连接以保护你的数据。', trust: '信任并继续', connectReady: '连接后即可查看并继续电脑上的对话。', offlineHelp: '这台设备已离线。请确认电脑上的 DSH Remote 插件正在运行。', secureConnect: '连接设备',
+    title: '设备', myDevices: '我的设备', lead: '选择一台设备，继续你的工作', detailHint: '长按设备可查看详情和重新配对', footer: '随时继续你的工作。', favorites: '收藏夹', recent: '最近访问', openFavorite: (title: string, device: string) => `打开收藏夹中 ${device} 上的“${title}”`, openRecent: (title: string, device: string) => `打开最近访问的“${title}”（${device}）`, removeFavorite: (title: string) => `从收藏夹移除“${title}”`, emptyTitle: '还没有可用设备', emptyBody: '在电脑上安装 DSH Remote 插件并登录同一账号，设备就会出现在这里。', options: '管理设备', encrypted: '安全连接',
+    connectionInterrupted: '连接已断开', trustExplanation: '确认后，此手机会记住这台设备的安全身份。如果身份发生变化，将停止连接以保护你的数据。', badgePaired: '已配对', badgePending: '待确认', badgeUnpaired: '未配对', pairPendingExplanation: '已经扫码保存了这台电脑的公钥。请在电脑上确认配对码，确认后返回这里继续连接。', pairExplanation: '这台设备还没有与手机完成配对。请在电脑上生成配对码，再用手机扫描，双方核对同一串确认码后才建立连接。', repair: '重新配对', pairNow: '扫码配对', trust: '信任并继续', connectReady: '连接后即可查看并继续电脑上的对话。', offlineHelp: '这台设备已离线。请确认电脑上的 DSH Remote 插件正在运行。', secureConnect: '连接设备',
     connectingTitle: '连接设备', connecting: '正在连接', connectionReady: '已就绪', retryConnection: '重新连接', cancelConnection: '取消连接', openInfo: '查看设备和连接信息',
     connectionProbeLabels: {
       lan: '探测局域网直连',

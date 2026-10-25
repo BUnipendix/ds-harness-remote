@@ -223,7 +223,25 @@ Codex 属于同一个 Remote Plugin，但在 Plugin 内保持独立业务领域�
 - [x] 固定 hello/hello.ack 版本拒绝、capability 协商与 Control/Relay frame 上限
 - [x] 拒绝超限 Control/Relay frame 和 binary Control frame
 - [ ] 完成 Noise 实现的独立安全审查。
+- [ ] **P0 端到端加密身份带外配对**：Host 出码（短码/QR），Client 以带外 `identityKey` 作为 Noise `rs`；`TrustedPeer` 增加 `verification` 并区分未验证/已验证 UI。见 [审查](design/e2ee-and-transport-review.md#4-f1-改造方案让-mitm-不可能而不是不可能被发现)。
+- [ ] **P0 MITM 回归测试**：恶意 Server fixture 替换 descriptor 公钥，断言改造前可解密、改造后拒绝连接。
+- [ ] **P1 传输压缩（思维链）**：明文侧 per-message deflate（`fflate`），通道内协商，限制解压上限与膨胀比；失败回落不压缩。见 [设计 §12](design/minimal-secure-channel.md#12-可选传输压缩用于思维链等高冗余流)。
+- [x] **P0 SAS 强度**：60 bit base32、HKDF 域分离、三次错误即作废 offer。见 [设计 §4](design/minimal-secure-channel.md#4-首次配对只发生一次)。
+- [x] **P0 `verifying` 状态**：未确认的连接不进入连接控制器，不落 pin，不承载业务。
+- [x] **P0 `/remote pair` 命令**：生成并渲染二维码、`confirm/status/cancel` 子命令，见 `docs/dsh-tui.md`。
+- [x] **P0 Desktop 配对界面**：设置页单一 QR 组件（`client/qr-panel.ts`），`host.pair.begin/status/confirm/cancel` 控制端点。
+- [ ] **P1 Android 扫码界面**：调用 `pairWithOffer`，需要摄像头权限。
+- [ ] **P1 `requireVerifiedPeer` 翻默认值**：等 Desktop/Android UI 就位后再改为 `true`，否则现有连接会全部被拒。
+- [ ] **P0 不提供"一键接受新密钥"**：密钥变更只能走完整带外重新配对。
+- [ ] **P0 配对 nonce 单次使用**：5 分钟过期、单会话独占、成功后作废。
+- [ ] **P0 文档诚实化**：Remote Web 由 Server 同源下发，该路径的信任锚是 Server；`end-to-end-encryption.md` 与 UI 加密状态不得统一表述为"Server 读不到"。
+- [ ] **P1 客户端 ICE 覆盖**：允许用户在 Remote 设置里填写自带 STUN/TURN（含凭证），与 Server 下发值合并；Server 不下发 TURN 时仍可直连。
+- [ ] **P1 Desktop/Node 代理支持**：ws `agent` + REST 代理 + 检测到代理时跳过 ICE 直接 Relay。
+- [ ] **P1 带内信令（仅纯 Relay Server 需要）**：在已建立的 Noise 通道内交换 `dsh.transport.*` signaling，把数据面迁移到 WebRTC；任何只转发密文的 Server 都兼容。见 [审查 §11.4](design/e2ee-and-transport-review.md#114-打洞分两种情况)。
+- [ ] （可选，不影响不建服务器的路径）自部署 Server 补齐 signaling 转发与 TURN 短期凭证（`/api/v1/turn/credentials` + coturn 部署说明）。
 - [ ] 定义并实现长期连接 rekey 与连接最大生命周期。
+- [ ] Relay padding、counter 混淆与心跳抖动，降低流量分析价值。
+- [ ] Remote Web 前端改由独立 origin 或浏览器扩展分发，脱离 Server 静态资源信任域。
 - [ ] 核对断线密钥清理。补齐清理策略与核心测试。
 - [ ] 增加剩余协议 golden vectors
 - [x] 增加 Noise IK golden vector

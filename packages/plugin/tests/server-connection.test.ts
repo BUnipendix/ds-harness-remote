@@ -100,6 +100,7 @@ describe('HostServerConnection', () => {
       publicKey: clientKeys.publicKey,
       fingerprint: 'CLIENT',
       trustedAt: 1,
+      verification: 'pairing',
       membershipId: 'membership-1',
     }
     const socket = new FakeWebSocket()
@@ -137,6 +138,7 @@ describe('HostServerConnection', () => {
       ...input,
       fingerprint: 'CLIENT',
       trustedAt: 1,
+    verification: 'pairing',
     }))
     const log = logger()
     const server = new HostServerConnection(
@@ -642,6 +644,7 @@ describe('HostServerConnection', () => {
         publicKey: clientKeys.publicKey,
         fingerprint: 'CLIENT',
         trustedAt: 1,
+        verification: 'pairing',
         membershipId: 'membership-race',
       },
       preferredTransports: ['lan', 'p2p', 'turn', 'relay'],
@@ -817,6 +820,7 @@ function config(): ResolvedConfig {
     serverUrl: 'https://dsh.r2049.cn',
     deviceName: 'Host',
     forceRelay: true,
+    identity: { requireVerifiedPeer: false },
     logLevel: 'error',
     reconnect: { enabled: false, initialDelayMs: 100, maxDelayMs: 1_000, jitter: 0 },
     codex: { enabled: false, binary: 'codex' },

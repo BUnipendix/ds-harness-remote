@@ -1439,6 +1439,7 @@ function config(): ResolvedConfig {
     serverUrl: 'https://dsh.r2049.cn',
     deviceName: 'Local Harness',
     forceRelay: false,
+    identity: { requireVerifiedPeer: false },
     logLevel: 'error',
     reconnect: { enabled: true, initialDelayMs: 100, maxDelayMs: 1_000, jitter: 0 },
     codex: { enabled: false, binary: 'codex' },

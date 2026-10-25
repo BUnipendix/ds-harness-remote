@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { AnimatedEllipsis } from '../ui/animated-ellipsis'
 import * as Haptics from 'expo-haptics'
 import { AccessibilityInfo, ActivityIndicator, Alert, Animated, BackHandler, Easing, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native'
-import { Archive, ArrowLeft, ChevronRight, CircleCheck, Code2, Laptop, MessageSquareText, MoreVertical, Pencil, ShieldCheck, Sparkles, Trash2, X } from 'lucide-react-native'
+import { Archive, ArrowLeft, ChevronRight, CircleCheck, Code2, Laptop, MessageSquareText, MoreVertical, Pencil, QrCode, ShieldCheck, Sparkles, Trash2, X } from 'lucide-react-native'
 import { useAppStore } from '../state/store'
 import type { ConnectionProbeTransport, ConnectionStage, RemoteDevice, RemoteSession, WorkspaceShortcut } from '../types'
 import { workspaceStableKey } from '../lib/workspace-key'
@@ -29,11 +29,15 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { resolveSessionDisplayTitle } from './session-title'
 import { DeviceRenameModal } from './device-rename-modal'
 
-export function DevicesScreen({ onDevice, onBack, onMore, onShortcut }: {
+export function DevicesScreen({ onDevice, onDeviceDetail, onBack, onMore, onShortcut, onPair }: {
   onDevice: (device: RemoteDevice) => void
   onBack?: () => void
   onMore?: () => void
   onShortcut?: (shortcut: WorkspaceShortcut) => void
+  /** Open the QR pairing scanner (out-of-band identity pinning). */
+  /** Opens the details screen (identity, connection info, re-pairing). */
+  onDeviceDetail: (device: RemoteDevice) => void
+  onPair?: () => void
 }) {
   const devices = useAppStore(state => state.devices)
   const favoriteWorkspaces = useAppStore(state => state.favoriteWorkspaces)
@@ -137,7 +141,12 @@ export function DevicesScreen({ onDevice, onBack, onMore, onShortcut }: {
                     </View>
                   </View>
                 )}
-                <SectionTitle action={<RefreshAction refreshing={refreshing} onPress={() => void refresh()} />}>
+                <SectionTitle action={<View style={styles.headerActions}>
+                  {onPair === undefined ? null : (
+                    <IconButton label={zhCN.pairing.title} icon={QrCode} onPress={onPair} />
+                  )}
+                  <RefreshAction refreshing={refreshing} onPress={() => void refresh()} />
+                </View>}>
                   {zhCN.devices.myDevices}
                 </SectionTitle>
               </>
@@ -145,6 +154,7 @@ export function DevicesScreen({ onDevice, onBack, onMore, onShortcut }: {
                 <View>
                   <Text style={styles.title}>{zhCN.devices.myDevices}</Text>
                   <Text style={styles.subtitle}>{zhCN.devices.lead}</Text>
+                  <Text style={styles.subtitleHint}>{zhCN.devices.detailHint}</Text>
                 </View>
                 <RefreshAction refreshing={refreshing} onPress={() => void refresh()} />
               </View>}
@@ -173,6 +183,7 @@ export function DevicesScreen({ onDevice, onBack, onMore, onShortcut }: {
                       if (openRowId !== undefined) { setOpenRowId(undefined); return }
                       onDevice(device)
                     }}
+                    onLongPress={() => onDeviceDetail(device)}
                     onRemove={() => removeDevice(device)}
                     onExited={() => forgetLeaving(device.deviceId)}
                   />
@@ -253,7 +264,7 @@ const SWIPE_SPRING = { damping: 18, stiffness: 220, mass: 0.9, useNativeDriver: 
 const nudge = (value: Animated.Value, toValue: number, duration: number) =>
   Animated.timing(value, { toValue, duration, easing: Easing.inOut(Easing.quad), useNativeDriver: true })
 
-function SwipeableDeviceRow({ device, open, exiting, animateIn, locked, onOpenChange, onPress, onRemove, onExited }: {
+function SwipeableDeviceRow({ device, open, exiting, animateIn, locked, onOpenChange, onPress, onLongPress, onRemove, onExited }: {
   device: RemoteDevice
   open: boolean
   exiting: boolean
@@ -261,6 +272,8 @@ function SwipeableDeviceRow({ device, open, exiting, animateIn, locked, onOpenCh
   locked: boolean
   onOpenChange: (open: boolean) => void
   onPress: () => void
+  /** Long press opens the device details, which also carries re-pairing. */
+  onLongPress: () => void
   onRemove: () => Promise<boolean>
   onExited: () => void
 }) {
@@ -439,12 +452,20 @@ function SwipeableDeviceRow({ device, open, exiting, animateIn, locked, onOpenCh
               onAccessibilityAction={event => { if (event.nativeEvent.actionName === 'delete') void requestRemove() }}
               disabled={busy || exiting}
               onPress={onPress}
+              onLongPress={onLongPress}
               style={({ pressed }) => [styles.swipeContentInner, pressed && styles.listRowPressed, busy && styles.swipeContentBusy]}
             >
               <View style={styles.rowIcon}><Laptop size={21} color={colors.primary} /></View>
               <View style={styles.rowCopy}>
                 <View style={styles.rowTitleLine}>
                   <Text style={styles.rowTitle} numberOfLines={1}>{device.name}</Text>
+                  <Text style={[styles.deviceBadge, isPaired(device)
+                    ? styles.deviceBadgePaired
+                    : isAwaitingConfirmation(device) ? styles.deviceBadgePending : styles.deviceBadgeUnpaired]}>
+                    {isPaired(device)
+                      ? zhCN.devices.badgePaired
+                      : isAwaitingConfirmation(device) ? zhCN.devices.badgePending : zhCN.devices.badgeUnpaired}
+                  </Text>
                   <Text style={[styles.deviceStatus, device.online && styles.deviceStatusOnline]}>
                     {device.online ? zhCN.status.online : zhCN.status.offline}
                   </Text>
@@ -856,25 +877,25 @@ export function ConnectionScreen({ device, onBack, onConnected }: {
   )
 }
 
-export function DeviceDetailScreen({ device, onBack, onConnect, onWorkspaces }: {
+export function DeviceDetailScreen({ device, onBack, onConnect, onPair, onWorkspaces }: {
   device: RemoteDevice
   onBack: () => void
   onConnect: () => void
+  /** Runs the out-of-band scan flow for this Host. */
+  onPair: () => void
   onWorkspaces?: () => void
 }) {
   const selected = useAppStore(state => state.selectedDevice)
   const connection = useAppStore(state => state.connection)
   const descriptor = useAppStore(state => state.hostDescriptor)
   const workspaces = useAppStore(state => state.workspaces)
-  const trust = useAppStore(state => state.trustDevice)
   const reconnect = useAppStore(state => state.reconnect)
+  const resetPairing = useAppStore(state => state.resetPairing)
   const [renaming, setRenaming] = useState(false)
   const isSelected = selected?.deviceId === device.deviceId
   const isConnected = isSelected && connection.phase === 'connected'
+  const paired = isPaired(device)
 
-  const trustAndContinue = async () => {
-    if (await trust(device) && device.online) onConnect()
-  }
   const { colors } = useTheme()
   const styles = useThemedStyles(createStyles)
   // Read-only diagnostics stay a readable column on wide landscape displays.
@@ -902,16 +923,18 @@ export function DeviceDetailScreen({ device, onBack, onConnect, onWorkspaces }: 
               </View>
             )}
 
-            {!device.trusted
+            {!paired
               ? <View style={styles.connectArea}>
                   <View style={styles.trustHeader}>
                     <View style={styles.trustIcon}><ShieldCheck size={22} color={colors.primary} /></View>
                     <View style={styles.trustCopy}>
-                      <Text style={styles.connectCopy}>{zhCN.devices.trustExplanation}</Text>
+                      <Text style={styles.connectCopy}>
+                        {isAwaitingConfirmation(device) ? zhCN.devices.pairPendingExplanation : zhCN.devices.pairExplanation}
+                      </Text>
                       {device.fingerprint !== undefined && <Text selectable style={styles.fingerprint}>{device.fingerprint}</Text>}
                     </View>
                   </View>
-                  <Button label={zhCN.devices.trust} onPress={() => void trustAndContinue()} />
+                  <Button label={zhCN.devices.pairNow} onPress={onPair} />
                 </View>
               : !isConnected
                 ? <View style={styles.connectArea}>
@@ -937,6 +960,12 @@ export function DeviceDetailScreen({ device, onBack, onConnect, onWorkspaces }: 
 
                     {onWorkspaces !== undefined && <View style={styles.primaryArea}><Button label={zhCN.devices.viewWorkspaces} icon={MessageSquareText} onPress={onWorkspaces} /></View>}
                   </>}
+
+            {paired && (
+              <View style={styles.primaryArea}>
+                <Button label={zhCN.devices.repair} variant="secondary" onPress={() => void resetPairing(device.deviceId)} />
+              </View>
+            )}
           </View>
         </Screen>
       </BlurHeaderFrame>
@@ -996,6 +1025,16 @@ function sessionTitle(session: RemoteSession): string {
   const resolvedTitle = resolveSessionDisplayTitle(session)
   if (resolvedTitle !== undefined) return resolvedTitle
   return isSubagentSession(session) ? zhCN.sessions.child : zhCN.sessions.untitled
+}
+
+/** A scanned pin is not a finished pairing until the Host routes traffic. */
+export function isPaired(device: RemoteDevice): boolean {
+  return device.trusted && device.verification === 'pairing' && device.confirmedAt !== undefined
+}
+
+/** Scanned but not yet confirmed on the Host screen. */
+function isAwaitingConfirmation(device: RemoteDevice): boolean {
+  return device.trusted && device.verification === 'pairing' && device.confirmedAt === undefined
 }
 
 function platformName(platform: string): string {
@@ -1097,6 +1136,7 @@ function createStyles(colors: ThemeColors) {
   subtitle: { ...type.small, color: colors.muted, marginTop: 2 },
   homeFooter: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.md },
   homeFooterText: { ...type.small, color: colors.muted, textAlign: 'center' },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   favoriteLinks: { gap: spacing.xxs },
   favoriteRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   // Two fixed columns so the "· machine" text starts at the same x on every row.
@@ -1122,10 +1162,15 @@ function createStyles(colors: ThemeColors) {
   statusDotDoneLarge: { width: 14, height: 14, borderRadius: 7, backgroundColor: colors.success },
   rowIcon: { width: 42, height: 42, borderRadius: radius.md, backgroundColor: colors.primarySoft, alignItems: 'center', justifyContent: 'center' },
   rowCopy: { flex: 1, gap: 3 },
+  subtitleHint: { ...type.small, color: colors.subtle, marginTop: 2 },
   rowTitleLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.xs },
   rowTitle: { ...type.bodyStrong, color: colors.ink, flex: 1 },
   deviceStatus: { ...type.smallStrong, color: colors.muted },
   deviceStatusOnline: { color: colors.success },
+  deviceBadge: { ...type.small, paddingHorizontal: spacing.xs, paddingVertical: 1, borderRadius: radius.sm, overflow: 'hidden' },
+  deviceBadgePaired: { color: colors.success, backgroundColor: colors.successSoft },
+  deviceBadgePending: { color: colors.warning, backgroundColor: colors.warningSoft },
+  deviceBadgeUnpaired: { color: colors.muted, backgroundColor: colors.surfaceStrong },
   rowDetailLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
   rowSubtitle: { ...type.small, color: colors.muted },
   rowInlineSubtitle: { flex: 1 },

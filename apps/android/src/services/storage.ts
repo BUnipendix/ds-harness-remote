@@ -85,10 +85,64 @@ export async function clearDeviceCredentials(): Promise<void> {
   await SecureStore.deleteItemAsync(KEYS.credentials, secureOptions)
 }
 
-export async function trustHost(host: RemoteDevice): Promise<void> {
+/**
+ * Persist a Host identity pin.
+ *
+ * `verification` records where the key came from: `pairing` means the operator
+ * scanned a locally rendered QR code, `unverified` means it arrived in a Server
+ * descriptor. Only a pairing pin may be treated as a real identity check.
+ */
+export async function trustHost(
+  host: RemoteDevice,
+  options: { verification?: 'pairing' | 'unverified' } = {},
+): Promise<void> {
   const hosts = await loadTrustedHosts()
-  const next = [...hosts.filter(item => item.deviceId !== host.deviceId), { ...host, trusted: true }]
+  const existing = hosts.find(item => item.deviceId === host.deviceId)
+  const verification = options.verification
+    ?? (existing?.verification === 'pairing' ? 'pairing' : 'unverified')
+  const next = [
+    ...hosts.filter(item => item.deviceId !== host.deviceId),
+    { ...host, trusted: true, verification },
+  ]
   await writeJson(KEYS.trustedHosts, next)
+}
+
+/**
+ * Record that the Host accepted this phone's key.
+ *
+ * Pinning only proves where the key came from; the Host confirms it by routing
+ * traffic, and a Host that never confirmed the peer keeps refusing until the
+ * operator walks through the pairing screen again.
+ */
+export async function confirmHost(deviceId: string): Promise<void> {
+  const hosts = await loadTrustedHosts()
+  let changed = false
+  const next = hosts.map(host => {
+    if (host.deviceId !== deviceId) return host
+    changed = true
+    return { ...host, confirmedAt: Date.now() }
+  })
+  if (changed) await writeJson(KEYS.trustedHosts, next)
+}
+
+/**
+ * Put one Host back to "not paired" without touching the account.
+ *
+ * The identity key stays pinned so the row keeps its fingerprint, but the
+ * operator has to scan a fresh code before this phone may open a tunnel again.
+ * This is how a re-run of the out-of-band check happens without unbinding the
+ * device and losing the Server-side membership.
+ */
+export async function resetHostPairing(deviceId: string): Promise<void> {
+  const hosts = await loadTrustedHosts()
+  let changed = false
+  const next = hosts.map(host => {
+    if (host.deviceId !== deviceId) return host
+    changed = true
+    const { confirmedAt: _confirmed, ...rest } = host
+    return { ...rest, verification: 'unverified' as const }
+  })
+  if (changed) await writeJson(KEYS.trustedHosts, next)
 }
 
 export async function forgetHost(deviceId: string): Promise<void> {

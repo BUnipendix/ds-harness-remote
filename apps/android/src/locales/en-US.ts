@@ -1,6 +1,26 @@
 import type { Messages } from './types'
 
 const enUS = {
+  pairing: {
+    pinned: "Host key saved",
+    confirmOnComputer: "Confirm the pairing on the computer",
+    title: "Pair a device",
+    hint: "Scan the QR code shown on the computer",
+    wrongDevice: 'That code belongs to a different device. Scan again.',
+    errorExpired: 'This pairing code expired. Generate a new one on the computer.',
+    errorInvalid: 'This is not a valid pairing code. Point the camera at the code on the computer.',
+    errorSas: 'The codes do not match. Compare them again.',
+    hintFor: (name: string) => `Scan the code shown on ${name}`,
+    permission: "Camera access is required to scan the pairing code",
+    grant: "Allow camera",
+    codeTitle: "Compare this code with the one on the computer",
+    matched: "Codes match — paired",
+    failed: "Pairing failed",
+    retry: "Scan again",
+    connect: "Connect to computer",
+    connecting: "Connecting…",
+    done: "Done",
+  },
   bots: {
     btw: "Side question",
     btwHint: "Use /btw to ask without interrupting or adding to the Bot’s context.",
@@ -110,6 +130,7 @@ const enUS = {
     cacheRestoreFailed: "Could not restore browsing preferences. Online history is still available.",
     conversationMissing: "This conversation is no longer available on the current Host.",
     unknownHost: "The notification Host is not a trusted device for the current account.",
+    pairFirst: 'This computer is not paired yet. Scan its code first.',
     starred: "Favorite conversations",
     running: "Running",
     recent: "Recently visited",
@@ -225,8 +246,8 @@ const enUS = {
   },
   devices: {
     rename: 'Rename', renameTitle: 'Rename device', namePlaceholder: 'Enter a device name', saveName: 'Save', renameHint: 'The new name is shared across your account’s device lists.',
-    title: 'Devices', myDevices: 'My devices', lead: 'Choose a device to continue your work', footer: 'Continue your work anytime.', favorites: 'Favorites', recent: 'Recently visited', openFavorite: (title: string, device: string) => `Open “${title}” on ${device} from Favorites`, openRecent: (title: string, device: string) => `Open recently visited “${title}” on ${device}`, removeFavorite: (title: string) => `Remove “${title}” from Favorites`, emptyTitle: 'No devices available', emptyBody: 'Install the DSH Remote plugin on your computer and sign in to the same account. The device will appear here.', options: 'Manage device', encrypted: 'Secure connection',
-    connectionInterrupted: 'Connection interrupted', trustExplanation: 'After confirmation, this phone remembers the device’s secure identity. If that identity changes, the connection stops to protect your data.', trust: 'Trust and continue', connectReady: 'Connect to view and continue conversations on your computer.', offlineHelp: 'This device is offline. Make sure the DSH Remote plugin is running on your computer.', secureConnect: 'Connect securely',
+    title: 'Devices', myDevices: 'My devices', lead: 'Choose a device to continue your work', detailHint: 'Long-press a device for details and re-pairing', footer: 'Continue your work anytime.', favorites: 'Favorites', recent: 'Recently visited', openFavorite: (title: string, device: string) => `Open “${title}” on ${device} from Favorites`, openRecent: (title: string, device: string) => `Open recently visited “${title}” on ${device}`, removeFavorite: (title: string) => `Remove “${title}” from Favorites`, emptyTitle: 'No devices available', emptyBody: 'Install the DSH Remote plugin on your computer and sign in to the same account. The device will appear here.', options: 'Manage device', encrypted: 'Secure connection',
+    connectionInterrupted: 'Connection interrupted', trustExplanation: 'After confirmation, this phone remembers the device’s secure identity. If that identity changes, the connection stops to protect your data.', badgePaired: 'Paired', badgePending: 'Pending', badgeUnpaired: 'Not paired', pairPendingExplanation: "This computer's key is already saved from the scan. Confirm the pairing code on the computer, then continue here.", pairExplanation: 'This device has not been paired with this phone yet. Generate a pairing code on the computer, scan it here, and confirm the same code on both screens before connecting.', repair: 'Pair again', pairNow: 'Scan to pair', trust: 'Trust and continue', connectReady: 'Connect to view and continue conversations on your computer.', offlineHelp: 'This device is offline. Make sure the DSH Remote plugin is running on your computer.', secureConnect: 'Connect securely',
     connectingTitle: 'Connect device', connecting: 'Connecting', connectionReady: 'Ready', retryConnection: 'Connect again', cancelConnection: 'Cancel connection', openInfo: 'View device and connection information',
     connectionProbeLabels: {
       lan: 'Probing local direct path',

@@ -35,6 +35,8 @@
 - [ACP Remote / Agent adapters](acp-remote.md)：说明 #65 Agent ACP gateway、Cursor adapter、allowlist 与配置。
 - [端到端加密](end-to-end-encryption.md)：解释 Noise IK、设备身份固定、密钥生命周期、Server 可见元数据、重放保护与安全边界。
 - [网络与传输](network.md)：解释出站连接、Control/Data plane、LAN/P2P/TURN/Relay 选路、NAT、降级、断线恢复与当前验证状态。
+- [端到端加密可行性与传输选型审查](design/e2ee-and-transport-review.md)：TOFU 身份分发、Server 同源托管 Web 端两个缺口，以及打洞/代理选型与改造路线图。
+- [最小安全通道设计](design/minimal-secure-channel.md)：四层结构、配对流程、状态机、八条不变量，以及刻意不做的事。
 - [版本兼容说明](compatibility.zh.md)（[English](compatibility.md)）：记录 Plugin 与各版本 DeepSeek Harness 的 carrier、Session 和 Desktop 兼容范围。
 
 - [历史需求归档](archive/vibe-coding.md)：原始需求背景，不作为当前实现依据。

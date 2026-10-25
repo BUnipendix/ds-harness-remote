@@ -91,6 +91,29 @@ TUI 会显示二维码，并在二维码下方显示可点击的授权 URL：
 3. 按 `Esc` 或 `q` 返回会话界面。
 4. 输入 `/remote status` 确认连接状态。
 
+## 4.1 配对手机（Controller）
+
+登录成功不等于身份可信：Server 始终是公钥的唯一来源，恶意 Server 可以在中间替换。
+配对用两个带外通道把它排除掉：
+
+```text
+/remote pair                 # 生成二维码，仅在本机终端显示
+/remote pair confirm AAAA-BBBB-CCCC
+/remote pair status
+/remote pair cancel
+```
+
+1. 在本机（client/DSH）运行 `/remote pair`，终端显示二维码，5 分钟有效。
+2. 用手机（Controller）扫码，手机会显示一个 12 位确认码。
+3. 在本机输入 `/remote pair confirm <确认码>`。
+4. 一致则对方的公钥被 pin 住，手机自动重连；不一致则拒绝，连续三次错误作废本次配对。
+
+注意：
+
+- 二维码**不会**经过服务器，只在本机终端渲染。
+- 确认码由双方公钥和一次性 nonce 派生，本机在输入前**不显示**自己算出的值——否则照抄就没有意义。
+- 未完成确认的连接不承载任何 Remote 业务，只完成密钥握手。
+
 ## 5. 查看状态
 
 `/remote` 和 `/remote status` 都会打开状态界面：

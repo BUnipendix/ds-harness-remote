@@ -15155,6 +15155,12 @@ function abytes(b, ...lengths) {
   if (lengths.length > 0 && !lengths.includes(b.length))
     throw new Error("Uint8Array expected of length " + lengths + ", got length=" + b.length);
 }
+function ahash(h) {
+  if (typeof h !== "function" || typeof h.create !== "function")
+    throw new Error("Hash should be wrapped by utils.createHasher");
+  anumber(h.outputLen);
+  anumber(h.blockLen);
+}
 function aexists(instance, checkFinished = true) {
   if (instance.destroyed)
     throw new Error("Hash instance has been destroyed");
@@ -15175,6 +15181,9 @@ function clean(...arrays) {
 }
 function createView(arr) {
   return new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
+}
+function rotr(word, shift) {
+  return word << 32 - shift | word >>> shift;
 }
 var hasHexBuiltin = /* @__PURE__ */ (() => (
   // @ts-ignore
@@ -15281,6 +15290,12 @@ function setBigUint64(view, byteOffset, value, isLE3) {
   view.setUint32(byteOffset + h, wh, isLE3);
   view.setUint32(byteOffset + l, wl, isLE3);
 }
+function Chi(a, b, c) {
+  return a & b ^ ~a & c;
+}
+function Maj(a, b, c) {
+  return a & b ^ a & c ^ b & c;
+}
 var HashMD = class extends Hash {
   constructor(blockLen, outputLen, padOffset, isLE3) {
     super();
@@ -15371,6 +15386,16 @@ var HashMD = class extends Hash {
     return this._cloneInto();
   }
 };
+var SHA256_IV = /* @__PURE__ */ Uint32Array.from([
+  1779033703,
+  3144134277,
+  1013904242,
+  2773480762,
+  1359893119,
+  2600822924,
+  528734635,
+  1541459225
+]);
 var SHA512_IV = /* @__PURE__ */ Uint32Array.from([
   1779033703,
   4089235720,
@@ -15426,6 +15451,143 @@ var add5L = (Al, Bl, Cl, Dl, El) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0) + (Dl >
 var add5H = (low, Ah, Bh, Ch, Dh, Eh) => Ah + Bh + Ch + Dh + Eh + (low / 2 ** 32 | 0) | 0;
 
 // node_modules/@noble/hashes/esm/sha2.js
+var SHA256_K = /* @__PURE__ */ Uint32Array.from([
+  1116352408,
+  1899447441,
+  3049323471,
+  3921009573,
+  961987163,
+  1508970993,
+  2453635748,
+  2870763221,
+  3624381080,
+  310598401,
+  607225278,
+  1426881987,
+  1925078388,
+  2162078206,
+  2614888103,
+  3248222580,
+  3835390401,
+  4022224774,
+  264347078,
+  604807628,
+  770255983,
+  1249150122,
+  1555081692,
+  1996064986,
+  2554220882,
+  2821834349,
+  2952996808,
+  3210313671,
+  3336571891,
+  3584528711,
+  113926993,
+  338241895,
+  666307205,
+  773529912,
+  1294757372,
+  1396182291,
+  1695183700,
+  1986661051,
+  2177026350,
+  2456956037,
+  2730485921,
+  2820302411,
+  3259730800,
+  3345764771,
+  3516065817,
+  3600352804,
+  4094571909,
+  275423344,
+  430227734,
+  506948616,
+  659060556,
+  883997877,
+  958139571,
+  1322822218,
+  1537002063,
+  1747873779,
+  1955562222,
+  2024104815,
+  2227730452,
+  2361852424,
+  2428436474,
+  2756734187,
+  3204031479,
+  3329325298
+]);
+var SHA256_W = /* @__PURE__ */ new Uint32Array(64);
+var SHA256 = class extends HashMD {
+  constructor(outputLen = 32) {
+    super(64, outputLen, 8, false);
+    this.A = SHA256_IV[0] | 0;
+    this.B = SHA256_IV[1] | 0;
+    this.C = SHA256_IV[2] | 0;
+    this.D = SHA256_IV[3] | 0;
+    this.E = SHA256_IV[4] | 0;
+    this.F = SHA256_IV[5] | 0;
+    this.G = SHA256_IV[6] | 0;
+    this.H = SHA256_IV[7] | 0;
+  }
+  get() {
+    const { A, B, C, D, E, F, G, H } = this;
+    return [A, B, C, D, E, F, G, H];
+  }
+  // prettier-ignore
+  set(A, B, C, D, E, F, G, H) {
+    this.A = A | 0;
+    this.B = B | 0;
+    this.C = C | 0;
+    this.D = D | 0;
+    this.E = E | 0;
+    this.F = F | 0;
+    this.G = G | 0;
+    this.H = H | 0;
+  }
+  process(view, offset) {
+    for (let i = 0; i < 16; i++, offset += 4)
+      SHA256_W[i] = view.getUint32(offset, false);
+    for (let i = 16; i < 64; i++) {
+      const W15 = SHA256_W[i - 15];
+      const W2 = SHA256_W[i - 2];
+      const s0 = rotr(W15, 7) ^ rotr(W15, 18) ^ W15 >>> 3;
+      const s1 = rotr(W2, 17) ^ rotr(W2, 19) ^ W2 >>> 10;
+      SHA256_W[i] = s1 + SHA256_W[i - 7] + s0 + SHA256_W[i - 16] | 0;
+    }
+    let { A, B, C, D, E, F, G, H } = this;
+    for (let i = 0; i < 64; i++) {
+      const sigma1 = rotr(E, 6) ^ rotr(E, 11) ^ rotr(E, 25);
+      const T1 = H + sigma1 + Chi(E, F, G) + SHA256_K[i] + SHA256_W[i] | 0;
+      const sigma0 = rotr(A, 2) ^ rotr(A, 13) ^ rotr(A, 22);
+      const T2 = sigma0 + Maj(A, B, C) | 0;
+      H = G;
+      G = F;
+      F = E;
+      E = D + T1 | 0;
+      D = C;
+      C = B;
+      B = A;
+      A = T1 + T2 | 0;
+    }
+    A = A + this.A | 0;
+    B = B + this.B | 0;
+    C = C + this.C | 0;
+    D = D + this.D | 0;
+    E = E + this.E | 0;
+    F = F + this.F | 0;
+    G = G + this.G | 0;
+    H = H + this.H | 0;
+    this.set(A, B, C, D, E, F, G, H);
+  }
+  roundClean() {
+    clean(SHA256_W);
+  }
+  destroy() {
+    this.set(0, 0, 0, 0, 0, 0, 0, 0);
+    clean(this.buffer);
+  }
+};
 var K512 = /* @__PURE__ */ (() => split([
   "0x428a2f98d728ae22",
   "0x7137449123ef65cd",
@@ -15623,6 +15785,7 @@ var SHA512 = class extends HashMD {
     this.set(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
   }
 };
+var sha256 = /* @__PURE__ */ createHasher(() => new SHA256());
 var sha512 = /* @__PURE__ */ createHasher(() => new SHA512());
 
 // node_modules/@noble/curves/esm/utils.js
@@ -17233,6 +17396,270 @@ _RistrettoPoint.ZERO = /* @__PURE__ */ (() => new _RistrettoPoint(ed25519.Point.
 _RistrettoPoint.Fp = /* @__PURE__ */ (() => Fp)();
 _RistrettoPoint.Fn = /* @__PURE__ */ (() => Fn)();
 
+// node_modules/@noble/hashes/esm/hmac.js
+var HMAC = class extends Hash {
+  constructor(hash, _key) {
+    super();
+    this.finished = false;
+    this.destroyed = false;
+    ahash(hash);
+    const key = toBytes(_key);
+    this.iHash = hash.create();
+    if (typeof this.iHash.update !== "function")
+      throw new Error("Expected instance of class which extends utils.Hash");
+    this.blockLen = this.iHash.blockLen;
+    this.outputLen = this.iHash.outputLen;
+    const blockLen = this.blockLen;
+    const pad = new Uint8Array(blockLen);
+    pad.set(key.length > blockLen ? hash.create().update(key).digest() : key);
+    for (let i = 0; i < pad.length; i++)
+      pad[i] ^= 54;
+    this.iHash.update(pad);
+    this.oHash = hash.create();
+    for (let i = 0; i < pad.length; i++)
+      pad[i] ^= 54 ^ 92;
+    this.oHash.update(pad);
+    clean(pad);
+  }
+  update(buf) {
+    aexists(this);
+    this.iHash.update(buf);
+    return this;
+  }
+  digestInto(out) {
+    aexists(this);
+    abytes(out, this.outputLen);
+    this.finished = true;
+    this.iHash.digestInto(out);
+    this.oHash.update(out);
+    this.oHash.digestInto(out);
+    this.destroy();
+  }
+  digest() {
+    const out = new Uint8Array(this.oHash.outputLen);
+    this.digestInto(out);
+    return out;
+  }
+  _cloneInto(to) {
+    to || (to = Object.create(Object.getPrototypeOf(this), {}));
+    const { oHash, iHash, finished, destroyed, blockLen, outputLen } = this;
+    to = to;
+    to.finished = finished;
+    to.destroyed = destroyed;
+    to.blockLen = blockLen;
+    to.outputLen = outputLen;
+    to.oHash = oHash._cloneInto(to.oHash);
+    to.iHash = iHash._cloneInto(to.iHash);
+    return to;
+  }
+  clone() {
+    return this._cloneInto();
+  }
+  destroy() {
+    this.destroyed = true;
+    this.oHash.destroy();
+    this.iHash.destroy();
+  }
+};
+var hmac = (hash, key, message) => new HMAC(hash, key).update(message).digest();
+hmac.create = (hash, key) => new HMAC(hash, key);
+
+// node_modules/@noble/hashes/esm/hkdf.js
+function extract(hash, ikm, salt) {
+  ahash(hash);
+  if (salt === void 0)
+    salt = new Uint8Array(hash.outputLen);
+  return hmac(hash, toBytes(salt), toBytes(ikm));
+}
+var HKDF_COUNTER = /* @__PURE__ */ Uint8Array.from([0]);
+var EMPTY_BUFFER = /* @__PURE__ */ Uint8Array.of();
+function expand(hash, prk, info, length = 32) {
+  ahash(hash);
+  anumber(length);
+  const olen = hash.outputLen;
+  if (length > 255 * olen)
+    throw new Error("Length should be <= 255*HashLen");
+  const blocks = Math.ceil(length / olen);
+  if (info === void 0)
+    info = EMPTY_BUFFER;
+  const okm = new Uint8Array(blocks * olen);
+  const HMAC2 = hmac.create(hash, prk);
+  const HMACTmp = HMAC2._cloneInto();
+  const T = new Uint8Array(HMAC2.outputLen);
+  for (let counter = 0; counter < blocks; counter++) {
+    HKDF_COUNTER[0] = counter + 1;
+    HMACTmp.update(counter === 0 ? EMPTY_BUFFER : T).update(info).update(HKDF_COUNTER).digestInto(T);
+    okm.set(T, olen * counter);
+    HMAC2._cloneInto(HMACTmp);
+  }
+  HMAC2.destroy();
+  HMACTmp.destroy();
+  clean(T, HKDF_COUNTER);
+  return okm.slice(0, length);
+}
+var hkdf = (hash, ikm, salt, info, length) => expand(hash, extract(hash, ikm, salt), info, length);
+
+// node_modules/@noble/hashes/esm/sha256.js
+var sha2562 = sha256;
+
+// ../crypto/dist/pairing.js
+var PAIRING_SAS_BITS = 60;
+var PAIRING_SAS_CHARS = PAIRING_SAS_BITS / 5;
+var PAIRING_SAS_INFO = "dsh-sas-v1";
+var BASE32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+var PairingCodeError = class extends Error {
+  code;
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+};
+function derivePairingSas(input3) {
+  const host = requireKey(input3.hostPublicKey, "host public key");
+  const client = requireKey(input3.clientPublicKey, "client public key");
+  const nonce = requireKey(input3.nonce, "pairing nonce");
+  const ikm = new Uint8Array(host.byteLength + client.byteLength);
+  ikm.set(host, 0);
+  ikm.set(client, host.byteLength);
+  const derived = hkdf(sha2562, ikm, nonce, new TextEncoder().encode(PAIRING_SAS_INFO), Math.ceil(PAIRING_SAS_CHARS * 5 / 8));
+  return toBase32(derived).slice(0, PAIRING_SAS_CHARS).match(/.{1,4}/gu).join("-");
+}
+function normalizePairingCode(input3) {
+  const compact = input3.toUpperCase().replace(/[^A-Z2-7]/gu, "");
+  if (compact.length !== PAIRING_SAS_CHARS) {
+    throw new PairingCodeError("SAS_INVALID", `Enter all ${PAIRING_SAS_CHARS} characters of the code shown on the other device.`);
+  }
+  return compact.match(/.{1,4}/gu).join("-");
+}
+function pairingSasMatches(expected, typed) {
+  const left = new TextEncoder().encode(normalizePairingCode(expected));
+  const right = new TextEncoder().encode(normalizePairingCode(typed));
+  if (left.byteLength !== right.byteLength)
+    return false;
+  let different = 0;
+  for (let index = 0; index < left.byteLength; index += 1)
+    different |= left[index] ^ right[index];
+  return different === 0;
+}
+function createPairingNonce(random = (length) => new Uint8Array(randomBytes(length))) {
+  const bytes = random(32);
+  if (bytes.byteLength !== 32)
+    throw new PairingCodeError("PAIRING_INVALID_NONCE", "Pairing nonce must be 32 bytes.");
+  return toBase64Url2(bytes);
+}
+function requireKey(value, label) {
+  let bytes;
+  try {
+    bytes = fromBase64Url2(value);
+  } catch {
+    throw new PairingCodeError("PAIRING_INVALID_KEY", `${label} is not base64url.`);
+  }
+  if (bytes.byteLength !== 32)
+    throw new PairingCodeError("PAIRING_INVALID_KEY", `${label} must be 32 bytes.`);
+  return bytes;
+}
+function toBase32(bytes) {
+  let bits = 0;
+  let value = 0;
+  let out = "";
+  for (const byte of bytes) {
+    value = value << 8 | byte;
+    bits += 8;
+    while (bits >= 5) {
+      out += BASE32[value >>> bits - 5 & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0)
+    out += BASE32[value << 5 - bits & 31];
+  return out;
+}
+var PAIRING_SCHEME = "dshpair://v1";
+var DEFAULT_PAIRING_TTL_MS = 5 * 6e4;
+var MAX_DEVICE_ID_LENGTH = 64;
+var MAX_DEVICE_NAME_LENGTH2 = 80;
+var BASE64URL_KEY = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u;
+var KNOWN_KEYS = /* @__PURE__ */ new Set(["h", "k", "n", "e", "d"]);
+function createPairingOffer(input3) {
+  if (input3.hostDeviceId.length === 0 || input3.hostDeviceId.length > MAX_DEVICE_ID_LENGTH) {
+    throw new PairingCodeError("PAIRING_INVALID_DEVICE_ID", "Host device id is not usable in a pairing offer.");
+  }
+  if (!BASE64URL_KEY.test(input3.hostPublicKey)) {
+    throw new PairingCodeError("PAIRING_INVALID_KEY", "Host public key must be a 32-byte base64url X25519 key.");
+  }
+  const name2 = input3.hostDeviceName?.trim();
+  if (name2 !== void 0 && (name2.length === 0 || name2.length > MAX_DEVICE_NAME_LENGTH2)) {
+    throw new PairingCodeError("PAIRING_INVALID_NAME", "Host device name must be 1-80 characters.");
+  }
+  const now = input3.now ?? Date.now();
+  const ttlMs = input3.ttlMs ?? DEFAULT_PAIRING_TTL_MS;
+  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0 || ttlMs > DEFAULT_PAIRING_TTL_MS) {
+    throw new PairingCodeError("PAIRING_INVALID_TTL", "Pairing offer lifetime must be positive and at most five minutes.");
+  }
+  const nonce = createPairingNonce(input3.random);
+  const expiresAt = now + ttlMs;
+  const offer = {
+    hostDeviceId: input3.hostDeviceId,
+    hostPublicKey: input3.hostPublicKey,
+    nonce,
+    expiresAt,
+    ...name2 === void 0 ? {} : { hostDeviceName: name2 }
+  };
+  const uri = `${PAIRING_SCHEME}?h=${encodeURIComponent(offer.hostDeviceId)}&k=${offer.hostPublicKey}&n=${nonce}&e=${expiresAt}` + (name2 === void 0 ? "" : `&d=${encodeURIComponent(name2)}`);
+  return { offer, uri };
+}
+function parsePairingOffer(uri, now = Date.now()) {
+  const trimmed = uri.trim();
+  const prefix = `${PAIRING_SCHEME}?`;
+  if (!trimmed.startsWith(prefix))
+    throw new PairingCodeError("PAIRING_INVALID_URI", "Not a DSH Remote pairing code.");
+  const params = {};
+  for (const part of trimmed.slice(prefix.length).split("&")) {
+    if (part === "")
+      continue;
+    const separator = part.indexOf("=");
+    if (separator <= 0)
+      throw new PairingCodeError("PAIRING_INVALID_URI", "Pairing code has a malformed parameter.");
+    const key = part.slice(0, separator);
+    if (!KNOWN_KEYS.has(key))
+      throw new PairingCodeError("PAIRING_INVALID_URI", "Pairing code has an unknown parameter.");
+    if (Object.hasOwn(params, key))
+      throw new PairingCodeError("PAIRING_INVALID_URI", "Duplicate pairing parameter.");
+    try {
+      params[key] = decodeURIComponent(part.slice(separator + 1));
+    } catch {
+      throw new PairingCodeError("PAIRING_INVALID_URI", "Pairing code has an invalid escape sequence.");
+    }
+  }
+  const { h, k, n, e, d } = params;
+  if (h === void 0 || h.length === 0 || h.length > MAX_DEVICE_ID_LENGTH) {
+    throw new PairingCodeError("PAIRING_INVALID_URI", "Pairing code is missing the Host device id.");
+  }
+  if (k === void 0 || !BASE64URL_KEY.test(k)) {
+    throw new PairingCodeError("PAIRING_INVALID_URI", "Pairing code is missing a valid Host public key.");
+  }
+  if (n === void 0 || !BASE64URL_KEY.test(n)) {
+    throw new PairingCodeError("PAIRING_INVALID_URI", "Pairing code is missing a valid nonce.");
+  }
+  if (e === void 0 || !/^\d{1,16}$/u.test(e)) {
+    throw new PairingCodeError("PAIRING_INVALID_URI", "Pairing code is missing an expiry.");
+  }
+  const expiresAt = Number(e);
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= now) {
+    throw new PairingCodeError("PAIRING_EXPIRED", "Pairing code has expired; generate a new one on the Host.");
+  }
+  if (d !== void 0 && (d.length === 0 || d.length > MAX_DEVICE_NAME_LENGTH2)) {
+    throw new PairingCodeError("PAIRING_INVALID_URI", "Pairing code has an invalid device name.");
+  }
+  return {
+    hostDeviceId: h,
+    hostPublicKey: k,
+    nonce: n,
+    expiresAt,
+    ...d === void 0 ? {} : { hostDeviceName: d }
+  };
+}
+
 // node_modules/@lukeburns/clatterjs/dist/constants.js
 var MAX_KEY_LEN = 32;
 var MAX_TAG_LEN = 16;
@@ -17842,7 +18269,7 @@ function abytes2(value, length, title = "") {
 function copyBytes2(bytes) {
   return Uint8Array.from(abytes2(bytes));
 }
-function ahash(h) {
+function ahash2(h) {
   if (typeof h !== "function" || typeof h.create !== "function")
     throw new TypeError("expected hash wrapped by utils.createHasher");
   anumber2(h.outputLen);
@@ -18121,7 +18548,7 @@ var SHA512_IV2 = /* @__PURE__ */ Uint32Array.from([
 ]);
 
 // node_modules/@noble/hashes/sha2.js
-var SHA256_K = /* @__PURE__ */ Uint32Array.from([
+var SHA256_K2 = /* @__PURE__ */ Uint32Array.from([
   1116352408,
   1899447441,
   3049323471,
@@ -18187,7 +18614,7 @@ var SHA256_K = /* @__PURE__ */ Uint32Array.from([
   3204031479,
   3329325298
 ]);
-var SHA256_W = /* @__PURE__ */ new Uint32Array(64);
+var SHA256_W2 = /* @__PURE__ */ new Uint32Array(64);
 var SHA2_32B = class extends HashMD2 {
   // We cannot use array here since array allows indexing by variable
   // which means optimizer/compiler cannot use registers.
@@ -18233,18 +18660,18 @@ var SHA2_32B = class extends HashMD2 {
   }
   process(view, offset) {
     for (let i = 0; i < 16; i++, offset += 4)
-      SHA256_W[i] = view.getUint32(offset, false);
+      SHA256_W2[i] = view.getUint32(offset, false);
     for (let i = 16; i < 64; i++) {
-      const W15 = SHA256_W[i - 15];
-      const W2 = SHA256_W[i - 2];
+      const W15 = SHA256_W2[i - 15];
+      const W2 = SHA256_W2[i - 2];
       const s0 = rotr2(W15, 7) ^ rotr2(W15, 18) ^ W15 >>> 3;
       const s1 = rotr2(W2, 17) ^ rotr2(W2, 19) ^ W2 >>> 10;
-      SHA256_W[i] = s1 + SHA256_W[i - 7] + s0 + SHA256_W[i - 16] | 0;
+      SHA256_W2[i] = s1 + SHA256_W2[i - 7] + s0 + SHA256_W2[i - 16] | 0;
     }
     let { A, B, C, D, E, F, G, H } = this;
     for (let i = 0; i < 64; i++) {
       const sigma1 = rotr2(E, 6) ^ rotr2(E, 11) ^ rotr2(E, 25);
-      const T1 = H + sigma1 + Chi2(E, F, G) + SHA256_K[i] + SHA256_W[i] | 0;
+      const T1 = H + sigma1 + Chi2(E, F, G) + SHA256_K2[i] + SHA256_W2[i] | 0;
       const sigma0 = rotr2(A, 2) ^ rotr2(A, 13) ^ rotr2(A, 22);
       const T2 = sigma0 + Maj2(A, B, C) | 0;
       H = G;
@@ -18267,7 +18694,7 @@ var SHA2_32B = class extends HashMD2 {
     this.set(A, B, C, D, E, F, G, H);
   }
   roundClean() {
-    clean2(SHA256_W);
+    clean2(SHA256_W2);
   }
   destroy() {
     this.destroyed = true;
@@ -18508,7 +18935,7 @@ var _SHA512 = class extends SHA2_64B {
     super(64, SHA512_IV2);
   }
 };
-var sha256 = /* @__PURE__ */ createHasher2(
+var sha2563 = /* @__PURE__ */ createHasher2(
   () => new _SHA256(),
   /* @__PURE__ */ oidNist(1)
 );
@@ -21089,7 +21516,7 @@ var _HMAC = class {
   finished = false;
   destroyed = false;
   constructor(hash, key) {
-    ahash(hash);
+    ahash2(hash);
     abytes2(key, void 0, "key");
     this.iHash = hash.create();
     if (typeof this.iHash.update !== "function")
@@ -21150,7 +21577,7 @@ var _HMAC = class {
     this.iHash.destroy();
   }
 };
-var hmac = /* @__PURE__ */ (() => {
+var hmac2 = /* @__PURE__ */ (() => {
   const hmac_ = ((hash, key, message) => new _HMAC(hash, key).update(message).digest());
   hmac_.create = (hash, key) => new _HMAC(hash, key);
   return hmac_;
@@ -21159,7 +21586,7 @@ var hmac = /* @__PURE__ */ (() => {
 // node_modules/@lukeburns/clatterjs/dist/crypto/hash.js
 function makeHash(name2, hash, hashLen, blockLen) {
   const doHash = (data2) => hash.create().update(data2).digest();
-  const hmac1 = (key, data2) => hmac(hash, key, data2);
+  const hmac1 = (key, data2) => hmac2(hash, key, data2);
   const hmacMany = (key, parts) => hmac1(key, parts.length === 1 ? parts[0] : concatBytes2(...parts));
   return {
     name: name2,
@@ -21186,7 +21613,7 @@ function makeHash(name2, hash, hashLen, blockLen) {
     }
   };
 }
-var sha256H = makeHash("SHA256", sha256, 32, 64);
+var sha256H = makeHash("SHA256", sha2563, 32, 64);
 var sha512H = makeHash("SHA512", sha5122, 64, 128);
 var blake2bH = makeHash("BLAKE2b", blake2b, 64, 128);
 var blake2sH = makeHash("BLAKE2s", blake2s, 32, 64);
@@ -21977,9 +22404,9 @@ var NoiseIkSession = class {
   transport;
   destroyed = false;
   constructor(options) {
-    const localPrivate = requireKey(options.localPrivateKey, "local private key");
-    const localPublic = requireKey(options.localPublicKey, "local public key");
-    this.expectedRemoteStatic = requireKey(options.remotePublicKey, "remote public key");
+    const localPrivate = requireKey2(options.localPrivateKey, "local private key");
+    const localPublic = requireKey2(options.localPublicKey, "local public key");
+    this.expectedRemoteStatic = requireKey2(options.remotePublicKey, "remote public key");
     const initiator = options.role === "initiator";
     this.handshake = new NqHandshake(noiseIk(), {
       prologue: Uint8Array.from(options.prologue),
@@ -22086,7 +22513,7 @@ function createNoisePrologue(connectionId, hostDeviceId, clientDeviceId) {
   }
   return new TextEncoder().encode(`DSH-REMOTE\0v=1\0connection=${connectionId}\0host=${hostDeviceId}\0client=${clientDeviceId}`);
 }
-function requireKey(value, label) {
+function requireKey2(value, label) {
   const key = fromBase64Url2(value);
   if (key.byteLength !== 32)
     throw new NoiseSessionError("INVALID_KEY", `${label} must be a 32-byte X25519 key.`);
@@ -22454,6 +22881,15 @@ var ClientConnection = class {
     const existing = this.context.identities.trustedPeer(descriptor.deviceId);
     if (existing !== void 0 && existing.publicKey !== descriptor.identityKey) {
       throw new ClientModeError("PEER_IDENTITY_MISMATCH", "The authorized Host identity key changed unexpectedly.");
+    }
+    if (this.context.config.identity.requireVerifiedPeer && (existing === void 0 || existing.verification === "unverified")) {
+      throw new ClientModeError("PEER_UNVERIFIED", "This Host is not paired on this device yet; run pairing before connecting.");
+    }
+    if (existing === void 0) {
+      this.context.logger.warn("trusting an unverified Host identity supplied by the Server", {
+        targetDeviceId: shortId(descriptor.deviceId),
+        verification: "unverified"
+      });
     }
     if (existing !== void 0 && existing.membershipId === descriptor.membershipId && existing.name === descriptor.name && existing.platform === descriptor.platform) {
       return existing;
@@ -26347,6 +26783,73 @@ async function readHarnessDistributionVersion(entrypoint = process.argv[1]) {
   }
 }
 
+// src/pairing.ts
+function deriveSas(input3) {
+  try {
+    return derivePairingSas(input3);
+  } catch (error) {
+    throw error instanceof PairingCodeError ? new PairingCodeError(error.code, error.message) : error;
+  }
+}
+function normalizeSasInput(input3) {
+  try {
+    return normalizePairingCode(input3);
+  } catch (error) {
+    throw error instanceof PairingCodeError ? new PairingCodeError(error.code, error.message) : error;
+  }
+}
+function sasMatches(expected, typed) {
+  try {
+    return pairingSasMatches(expected, typed);
+  } catch (error) {
+    throw error instanceof PairingCodeError ? new PairingCodeError(error.code, error.message) : error;
+  }
+}
+var PairingNonceRegistry = class {
+  open = /* @__PURE__ */ new Map();
+  register(offer) {
+    for (const [deviceId, entry] of this.open) if (entry.expiresAt <= Date.now()) this.open.delete(deviceId);
+    this.open.set(offer.hostDeviceId, { nonce: offer.nonce, expiresAt: offer.expiresAt });
+  }
+  /** The live nonce for a Host, if an unexpired offer is open. */
+  active(hostDeviceId, now = Date.now()) {
+    const entry = this.open.get(hostDeviceId);
+    if (entry === void 0) return void 0;
+    if (entry.expiresAt <= now) {
+      this.open.delete(hostDeviceId);
+      return void 0;
+    }
+    return entry.nonce;
+  }
+  /** Expiry of the live offer, used to bound a waiting pairing tunnel. */
+  expiryOf(hostDeviceId, now = Date.now()) {
+    const entry = this.open.get(hostDeviceId);
+    if (entry === void 0) return void 0;
+    if (entry.expiresAt <= now) {
+      this.open.delete(hostDeviceId);
+      return void 0;
+    }
+    return entry.expiresAt;
+  }
+  /** True when this nonce is the single live offer for the Host. */
+  accepts(hostDeviceId, nonce, now = Date.now()) {
+    const entry = this.open.get(hostDeviceId);
+    if (entry === void 0) return false;
+    if (entry.expiresAt <= now) {
+      this.open.delete(hostDeviceId);
+      return false;
+    }
+    return entry.nonce === nonce;
+  }
+  /** Drop the offer after a successful pairing; a nonce never works twice. */
+  consume(hostDeviceId) {
+    this.open.delete(hostDeviceId);
+  }
+  clear() {
+    this.open.clear();
+  }
+};
+
 // src/remote-api-proxy.ts
 var DIRECT_API_CALL_BYTES = 2 * 1024 * 1024;
 var AGENT_PRESET_SETTINGS_NS = "agent-presets";
@@ -27301,6 +27804,7 @@ var entryConfigSchema = s.object({
   deviceName: s.string(),
   terminal: s.object({ enabled: s.boolean() }),
   hostControl: s.object({ enabled: s.boolean() }),
+  identity: s.object({ requireVerifiedPeer: s.boolean() }),
   loopback: s.object({ ports: s.array(s.number()) }),
   forceRelay: s.boolean(),
   logLevel: s.union(["debug", "info", "warn", "error"]),
@@ -27342,6 +27846,7 @@ var configSchema = external_exports.object({
   deviceName: external_exports.string().trim().min(1).max(80).optional(),
   terminal: external_exports.object({ enabled: external_exports.boolean().optional() }).strict().optional(),
   hostControl: external_exports.object({ enabled: external_exports.boolean().optional() }).strict().optional(),
+  identity: external_exports.object({ requireVerifiedPeer: external_exports.boolean().optional() }).strict().optional(),
   loopback: external_exports.object({ ports: external_exports.array(external_exports.number().int().min(1024).max(65535)).max(16).optional() }).strict().optional(),
   forceRelay: external_exports.boolean().optional(),
   logLevel: external_exports.enum(["debug", "info", "warn", "error"]).optional(),
@@ -27378,6 +27883,10 @@ function resolveConfig(input3 = {}, env = process.env) {
     ...serverUrl === void 0 ? {} : { serverUrl },
     deviceName: parsed.deviceName ?? env.DSH_REMOTE_DEVICE_NAME ?? hostname(),
     hostControl: { enabled: parsed.hostControl?.enabled ?? true },
+    // Verified peers are the default: a key learned from the Server descriptor
+    // proves nothing about who is connecting, so an unpaired Controller must go
+    // through the live pairing offer before any business frame is accepted.
+    identity: { requireVerifiedPeer: parsed.identity?.requireVerifiedPeer ?? env.DSH_REMOTE_REQUIRE_VERIFIED_PEER !== "false" },
     terminal: { enabled: parsed.terminal?.enabled ?? (env.DSH_REMOTE_TERMINAL_ENABLED === void 0 || env.DSH_REMOTE_TERMINAL_ENABLED === "true") },
     loopback: { ports: [...new Set(parsed.loopback?.ports ?? [])] },
     forceRelay: parsed.forceRelay ?? false,
@@ -30203,6 +30712,34 @@ var ClientModeRuntime = class {
       throw new ClientModeError("CANCELLED", "The Remote workspace request was superseded or closed.");
     }
   }
+  /**
+   * Pin a Host from a pairing code scanned locally, and return the confirmation
+   * code to read out loud to that Host. Both values come from the QR payload and
+   * this device's own key, never from the Server.
+   */
+  async pairWithOffer(uri) {
+    const identity2 = this.requireIdentity();
+    const offer = parsePairingOffer(uri);
+    await this.identities.pinPeer({
+      deviceId: offer.hostDeviceId,
+      name: offer.hostDeviceName ?? "Host",
+      // The real platform arrives with the first descriptor; pinPeer keeps the
+      // out-of-band verification state when only metadata changes.
+      platform: "unknown",
+      publicKey: offer.hostPublicKey,
+      verification: "pairing"
+    });
+    return {
+      hostDeviceId: offer.hostDeviceId,
+      ...offer.hostDeviceName === void 0 ? {} : { hostDeviceName: offer.hostDeviceName },
+      confirmationCode: deriveSas({
+        hostPublicKey: offer.hostPublicKey,
+        clientPublicKey: identity2.publicKey,
+        nonce: offer.nonce
+      }),
+      expiresAt: offer.expiresAt
+    };
+  }
   requireIdentity() {
     if (this.identity === void 0) throw new ClientModeError("IDENTITY_INVALID", "The client identity is not ready.");
     return this.identity;
@@ -30224,6 +30761,7 @@ var identitySchema = external_exports.object({
   name: external_exports.string().min(1).max(80),
   publicKey: external_exports.string().min(1)
 }).strict();
+var peerVerificationSchema = external_exports.enum(["pairing", "user", "unverified"]);
 var trustedPeerSchema = external_exports.object({
   deviceId: external_exports.string().min(1),
   name: external_exports.string().min(1).max(80),
@@ -30231,7 +30769,8 @@ var trustedPeerSchema = external_exports.object({
   publicKey: external_exports.string().min(1),
   fingerprint: external_exports.string().min(1),
   trustedAt: external_exports.number().int().nonnegative(),
-  membershipId: external_exports.string().min(1).optional()
+  membershipId: external_exports.string().min(1).optional(),
+  verification: peerVerificationSchema.default("unverified")
 }).strict();
 var trustedPeersSchema = external_exports.object({
   schemaVersion: external_exports.literal(1),
@@ -30305,10 +30844,39 @@ var IdentityStore = class {
   isTrusted(deviceId, publicKey) {
     return this.peers.get(deviceId)?.publicKey === publicKey;
   }
+  /**
+   * Record a peer key that came from a Server device descriptor.
+   *
+   * Such a key only ever reaches `unverified`, and it can never downgrade or
+   * replace a key that was pinned out-of-band.
+   */
   async trustPeer(input3) {
+    return await this.recordPeer(input3, false);
+  }
+  /**
+   * Pin a peer key that arrived out-of-band (pairing payload or an explicit
+   * human confirmation). Only this path can mark a peer as verified, and only
+   * `replace` may change an already-pinned key.
+   */
+  async pinPeer(input3, options = {}) {
+    if (input3.verification === "unverified") {
+      throw new IdentityInvalidError("pinPeer requires an out-of-band verification source");
+    }
+    return await this.recordPeer(input3, options.replace === true);
+  }
+  /** True when the local pin did not come from the Server. */
+  isVerified(deviceId) {
+    return this.peers.get(deviceId)?.verification !== void 0 && this.peers.get(deviceId)?.verification !== "unverified";
+  }
+  async recordPeer(input3, replace) {
     this.current();
+    const existing = this.peers.get(input3.deviceId);
+    if (existing !== void 0 && existing.publicKey !== input3.publicKey && !replace) {
+      throw new IdentityInvalidError(`trusted peer ${input3.deviceId} is already pinned to a different key`);
+    }
     const peer = {
       ...input3,
+      verification: resolveVerification(existing, input3, replace),
       fingerprint: fingerprint(input3.publicKey),
       trustedAt: Date.now()
     };
@@ -30348,6 +30916,12 @@ function serverStorageDirectory(root, serverUrl, role) {
   const origin = new URL(serverUrl).origin;
   const scope2 = createHash("sha256").update(origin).digest("hex").slice(0, 24);
   return join4(root, "servers", scope2, role);
+}
+function resolveVerification(existing, input3, replace) {
+  const requested = input3.verification ?? "unverified";
+  const samePeer = existing !== void 0 && existing.publicKey === input3.publicKey && !replace;
+  if (samePeer && requested === "unverified") return existing.verification;
+  return requested;
 }
 function fingerprint(publicKey) {
   const compact = createHash("sha256").update(fromBase64Url2(publicKey)).digest("hex").slice(0, 12).toUpperCase();
@@ -38006,6 +38580,25 @@ var PluginControlRuntime = class {
         }
         return ok3(status2);
       }
+      if (endpoint === "host.pair.begin") {
+        if (this.host?.beginPairing === void 0) throw new ClientModeError("METHOD_NOT_ALLOWED", "This plugin is not running as a Host.");
+        return ok3(this.host.beginPairing());
+      }
+      if (endpoint === "host.pair.status") {
+        return ok3(this.host?.pendingPairing?.() ?? null);
+      }
+      if (endpoint === "host.pair.confirm") {
+        if (this.host?.confirmPairing === void 0) throw new ClientModeError("METHOD_NOT_ALLOWED", "This plugin is not running as a Host.");
+        const value = record7(payload);
+        if (typeof value.code !== "string" || value.code.length === 0 || value.code.length > 32) {
+          throw new ClientModeError("INVALID_MESSAGE", "A confirmation code is required.");
+        }
+        return ok3(await this.host.confirmPairing(value.code));
+      }
+      if (endpoint === "host.pair.cancel") {
+        this.host?.cancelPairing?.();
+        return ok3({ status: "cancelled" });
+      }
       if (endpoint === "host.reconnect") {
         if (this.host === void 0) throw new ClientModeError("METHOD_NOT_ALLOWED", "This plugin is not running as a Host.");
         this.host.reconnectHost();
@@ -39213,6 +39806,7 @@ function isOversizedListing(value) {
 
 // src/server-connection.ts
 var DEFAULT_WEBRTC_NEGOTIATE_TIMEOUT_MS = 12e3;
+var MAX_PAIRING_ATTEMPTS = 3;
 var HostServerConnection = class {
   constructor(config, identity2, identities, api, connections, logger, createWebSocket = (url) => new WebSocket(url), rtcFactoryProvider, hostCapabilities = () => ["harness.api.v1"], harnessVersion) {
     this.config = config;
@@ -39238,6 +39832,8 @@ var HostServerConnection = class {
   resumeQueued = false;
   authRecoveryAttempted = false;
   rtcFactory;
+  pairingOffers = new PairingNonceRegistry();
+  pairingCandidate;
   negotiatedCapabilities = ["transport.relay"];
   controlFrameLimits = {};
   webRtcNegotiateTimeoutMs = DEFAULT_WEBRTC_NEGOTIATE_TIMEOUT_MS;
@@ -39279,6 +39875,112 @@ var HostServerConnection = class {
   }
   lastActivity() {
     return this.lastActiveAt;
+  }
+  /**
+   * Open a local pairing offer. The returned URI is shown on this device only;
+   * it must never travel through the Server.
+   */
+  beginPairing(options = {}) {
+    const { offer, uri } = createPairingOffer({
+      hostDeviceId: this.identity.deviceId,
+      hostDeviceName: this.identity.name,
+      hostPublicKey: this.identity.publicKey,
+      ...options.ttlMs === void 0 ? {} : { ttlMs: options.ttlMs }
+    });
+    this.pairingOffers.register(offer);
+    this.pairingCandidate = void 0;
+    this.logger.info("pairing offer opened", { expiresAt: offer.expiresAt });
+    return { uri, expiresAt: offer.expiresAt };
+  }
+  /** A connection that finished Noise but is waiting for the operator's code. */
+  /**
+   * The waiting pairing, including the code this Host derived from the key that
+   * actually arrived. The UI must either show this code for a human comparison
+   * (and keep the confirm action locked for a few seconds) or show an input box
+   * instead — never both, or copying replaces comparing.
+   */
+  pendingPairing() {
+    const candidate = this.pairingCandidate;
+    if (candidate === void 0) return void 0;
+    if (candidate.expiresAt <= Date.now()) return void 0;
+    return {
+      peerDeviceId: candidate.peerDeviceId,
+      code: candidate.expectedSas,
+      attemptsLeft: MAX_PAIRING_ATTEMPTS - candidate.attempts,
+      expiresAt: candidate.expiresAt
+    };
+  }
+  /** Drop a pairing that outlived its offer, so no half-open tunnel lingers. */
+  async expirePairing(now = Date.now()) {
+    const candidate = this.pairingCandidate;
+    if (candidate === void 0 || candidate.expiresAt > now) return false;
+    this.pairingCandidate = void 0;
+    const tunnel = this.tunnels.get(candidate.connectionId);
+    if (tunnel !== void 0) await this.closeVerifyingTunnel(tunnel);
+    return true;
+  }
+  cancelPairing() {
+    this.pairingOffers.clear();
+    this.pairingCandidate = void 0;
+  }
+  /**
+   * Confirm the peer that is currently waiting by typing the code shown on the
+   * other device. The comparison runs against the Noise static key that arrived
+   * on *this* tunnel, so a Server-injected connection cannot borrow the code.
+   */
+  async confirmPairing(code) {
+    const candidate = this.pairingCandidate;
+    if (candidate === void 0) throw new PairingCodeError("PAIRING_NONE", "No pairing is waiting for confirmation.");
+    const tunnel = this.tunnels.get(candidate.connectionId);
+    if (candidate.expiresAt <= Date.now()) {
+      this.pairingCandidate = void 0;
+      if (tunnel !== void 0) await this.closeVerifyingTunnel(tunnel);
+      throw new PairingCodeError("PAIRING_EXPIRED", "The pairing code expired; generate a new one on the Host.");
+    }
+    const typed = normalizeSasInput(code);
+    if (!sasMatches(candidate.expectedSas, typed)) {
+      candidate.attempts += 1;
+      if (candidate.attempts >= MAX_PAIRING_ATTEMPTS) {
+        this.pairingCandidate = void 0;
+        this.pairingOffers.consume(this.identity.deviceId);
+        if (tunnel !== void 0) await this.closeVerifyingTunnel(tunnel);
+        this.logger.warn("pairing abandoned after repeated mismatches", {
+          peerDeviceId: shortId3(candidate.peerDeviceId)
+        });
+      }
+      throw new PairingCodeError("SAS_MISMATCH", "Confirmation code does not match the device that is connecting.");
+    }
+    if (tunnel !== void 0 && tunnel.peer.publicKey !== candidate.peer.publicKey) {
+      this.pairingCandidate = void 0;
+      throw new PairingCodeError("SAS_MISMATCH", "The waiting tunnel no longer matches the confirmed device.");
+    }
+    const pinned = await this.identities.pinPeer({ ...candidate.peer, verification: "pairing" });
+    this.pairingOffers.consume(this.identity.deviceId);
+    this.pairingCandidate = void 0;
+    if (tunnel !== void 0 && tunnel.verifying === true && tunnel.channel !== void 0) {
+      tunnel.verifying = false;
+      tunnel.peer = pinned;
+      try {
+        await this.connections.accept(tunnel.channel);
+      } catch (error) {
+        await this.closeVerifyingTunnel(tunnel);
+        this.logger.warn("pairing tunnel hand-off failed", {
+          peerDeviceId: shortId3(candidate.peerDeviceId),
+          reason: diagnosticReason3(error)
+        });
+        throw new PairingCodeError("PAIRING_NONE", "The pairing tunnel could not be handed over; connect again.");
+      }
+    } else if (tunnel !== void 0) {
+      await this.closeVerifyingTunnel(tunnel);
+    }
+    this.logger.info("peer identity pinned from pairing", { peerDeviceId: shortId3(candidate.peerDeviceId) });
+    return { status: "pinned", peerDeviceId: candidate.peerDeviceId };
+  }
+  async closeVerifyingTunnel(tunnel) {
+    if (this.tunnels.get(tunnel.connectionId) === tunnel) this.tunnels.delete(tunnel.connectionId);
+    await tunnel.rtc?.close().catch(() => void 0);
+    if (tunnel.channel !== void 0) await tunnel.channel.close().catch(() => void 0);
+    else tunnel.noise.destroy();
   }
   isReconnecting() {
     return !this.online && !this.stopped && this.running !== void 0;
@@ -39541,7 +40243,31 @@ var HostServerConnection = class {
       });
       return;
     }
-    const peer = existing !== void 0 && existing.membershipId === descriptor.membershipId && existing.name === descriptor.name && existing.platform === descriptor.platform ? existing : await this.identities.trustPeer({
+    const unverified = existing === void 0 || existing.verification === "unverified";
+    let pairingNonce;
+    if (unverified && this.config.identity.requireVerifiedPeer) {
+      const nonce = this.pairingOffers.active(this.identity.deviceId);
+      if (nonce === void 0 || this.pairingCandidate !== void 0) {
+        this.sendControl("connect.rejected", { connectionId: payload.connectionId });
+        this.logger.warn("connection rejected: unverified peer without an open pairing offer", {
+          peerDeviceId: shortId3(payload.clientDeviceId),
+          verification: existing?.verification ?? "unpaired",
+          pairingOpen: nonce !== void 0
+        });
+        return;
+      }
+      pairingNonce = nonce;
+    }
+    const peer = unverified && pairingNonce !== void 0 ? {
+      deviceId: descriptor.deviceId,
+      name: descriptor.name,
+      platform: descriptor.platform,
+      publicKey: descriptor.identityKey,
+      fingerprint: fingerprint(descriptor.identityKey),
+      trustedAt: 0,
+      membershipId: descriptor.membershipId,
+      verification: "unverified"
+    } : existing !== void 0 && existing.membershipId === descriptor.membershipId && existing.name === descriptor.name && existing.platform === descriptor.platform ? existing : await this.identities.trustPeer({
       deviceId: descriptor.deviceId,
       name: descriptor.name,
       platform: descriptor.platform,
@@ -39563,7 +40289,8 @@ var HostServerConnection = class {
       peer,
       preferredTransports: payload.preferredTransports,
       noise,
-      transport: "negotiating"
+      transport: "negotiating",
+      ...pairingNonce === void 0 ? {} : { verifying: true, pairingNonce }
     });
     this.sendControl("connect.accepted", { connectionId: payload.connectionId });
   }
@@ -39601,6 +40328,33 @@ var HostServerConnection = class {
       if (this.tunnels.get(tunnel.connectionId) === tunnel) this.tunnels.delete(tunnel.connectionId);
     }, mode2);
     tunnel.channel = channel;
+    if (tunnel.verifying === true) {
+      const nonce = tunnel.pairingNonce;
+      if (nonce === void 0) throw new ControlConnectionError("SECURE_CHANNEL_FAILED", "Pairing tunnel lost its nonce.");
+      this.pairingCandidate = {
+        connectionId: tunnel.connectionId,
+        peerDeviceId: tunnel.peer.deviceId,
+        peer: tunnel.peer,
+        expectedSas: deriveSas({
+          hostPublicKey: this.identity.publicKey,
+          clientPublicKey: tunnel.peer.publicKey,
+          nonce
+        }),
+        attempts: 0,
+        expiresAt: this.pairingOffers.expiryOf(this.identity.deviceId) ?? Date.now()
+      };
+      this.sendControl("secure.handshake", {
+        connectionId: tunnel.connectionId,
+        targetDeviceId: tunnel.peer.deviceId,
+        step: 2,
+        data: toBase64Url2(reply)
+      });
+      this.logger.info("pairing candidate awaiting confirmation", {
+        connectionId: shortId3(tunnel.connectionId),
+        peerDeviceId: shortId3(tunnel.peer.deviceId)
+      });
+      return;
+    }
     await this.connections.accept(channel);
     this.sendControl("secure.handshake", {
       connectionId: tunnel.connectionId,
@@ -41779,6 +42533,28 @@ var HostPluginRuntime = class {
     }
     this.serverConnection.reconnect();
   }
+  /**
+   * Start a local pairing offer. The URI must be rendered on this device only;
+   * it must never travel through the Server.
+   */
+  beginPairing(options = {}) {
+    return this.requireServerConnection().beginPairing(options);
+  }
+  /** A connection that finished Noise and is waiting for the operator's code. */
+  pendingPairing() {
+    return this.serverConnection?.pendingPairing();
+  }
+  cancelPairing() {
+    this.serverConnection?.cancelPairing();
+  }
+  async confirmPairing(code) {
+    return await this.requireServerConnection().confirmPairing(code);
+  }
+  requireServerConnection() {
+    const connection = this.serverConnection;
+    if (connection === void 0) throw new Error("Remote Host is not connected to a Server yet.");
+    return connection;
+  }
   async hostOAuthProviders() {
     if (this.serverApi === void 0) {
       throw new ServerApiError("SERVER_NOT_CONFIGURED", "Remote Host Server is unavailable.", false);
@@ -42428,7 +43204,7 @@ function installTuiRemoteCommand(ctx, resolveTarget) {
     const definition = {
       name: "remote",
       description: "Manage Remote Host login and connection status",
-      input: { hint: "[status | login [provider|list] | logout]" },
+      input: { hint: "[status | login [provider|list] | pair [confirm|status|cancel] | logout]" },
       recordInput: false,
       handler: async ({ rawInput }) => {
         const args = rawInput.trim().split(/\s+/u).filter(Boolean);
@@ -42480,6 +43256,52 @@ function installTuiRemoteCommand(ctx, resolveTarget) {
               text: `Local Remote Host credentials were cleared, but Server revocation failed (${errorCode5(error)}).`
             };
           }
+        }
+        if (command === "pair") {
+          const target2 = resolveTarget();
+          if (target2 === void 0) return remoteNotReady();
+          const sub = args[1];
+          try {
+            if (sub === void 0) {
+              const { uri, expiresAt } = target2.runtime.beginPairing();
+              const qr = await renderTerminalQr(uri);
+              return {
+                kind: "success",
+                text: [
+                  qr,
+                  "",
+                  "Scan this on the Controller (phone). It will show a confirmation code.",
+                  "Compare it and run here:",
+                  "  /remote pair confirm ABCD-EFGH-JKLM",
+                  "",
+                  `Expires at ${new Date(expiresAt).toLocaleTimeString()}`
+                ].join("\n")
+              };
+            }
+            if (sub === "confirm") {
+              const code = args.slice(2).join("");
+              if (code === "") return { kind: "error", text: "Usage: /remote pair confirm <code shown on the Controller>" };
+              const result = await target2.runtime.confirmPairing(code);
+              return {
+                kind: "success",
+                text: `Paired ${result.peerDeviceId}. The Controller reconnects automatically.`
+              };
+            }
+            if (sub === "status") {
+              const pending = target2.runtime.pendingPairing();
+              return {
+                kind: "success",
+                text: pending === void 0 ? "No pairing is waiting for confirmation." : `Waiting for the code from ${pending.peerDeviceId} (${pending.attemptsLeft} attempts left).`
+              };
+            }
+            if (sub === "cancel") {
+              target2.runtime.cancelPairing();
+              return { kind: "success", text: "Pairing cancelled." };
+            }
+          } catch (error) {
+            return { kind: "error", text: errorCode5(error) };
+          }
+          return { kind: "error", text: remoteCommandUsage() };
         }
         if (command === "config") {
           return { kind: "error", text: "Host configuration is not supported yet." };
@@ -42552,10 +43374,22 @@ function remoteCommandChildren(canonicalPath, providers) {
         descriptions: { zh: "\u4F7F\u7528\u670D\u52A1\u7AEF\u63D0\u4F9B\u7684 OAuth \u4E8C\u7EF4\u7801\u6388\u6743\u5F53\u524D Host" }
       },
       {
+        name: "pair",
+        description: "Pair a Controller by scanning a local QR code",
+        descriptions: { zh: "\u7528\u672C\u5730\u4E8C\u7EF4\u7801\u914D\u5BF9\u4E00\u53F0 Controller\uFF08\u624B\u673A\uFF09" }
+      },
+      {
         name: "logout",
         description: "Revoke this Host and rotate its local identity",
         descriptions: { zh: "\u64A4\u9500\u5F53\u524D Host \u5E76\u8F6E\u6362\u672C\u5730\u8EAB\u4EFD" }
       }
+    ];
+  }
+  if (canonicalPath.length === 2 && canonicalPath[0] === "remote" && canonicalPath[1] === "pair") {
+    return [
+      { name: "confirm", description: "Confirm with the code shown on the Controller", descriptions: { zh: "\u8F93\u5165 Controller \u4E0A\u663E\u793A\u7684\u786E\u8BA4\u7801" } },
+      { name: "status", description: "Show the pending pairing", descriptions: { zh: "\u67E5\u770B\u7B49\u5F85\u786E\u8BA4\u7684\u914D\u5BF9" } },
+      { name: "cancel", description: "Cancel the open pairing offer", descriptions: { zh: "\u53D6\u6D88\u5F53\u524D\u914D\u5BF9" } }
     ];
   }
   if (canonicalPath.length === 2 && canonicalPath[0] === "remote" && canonicalPath[1] === "login") {
@@ -42606,6 +43440,7 @@ function remoteCommandUsage() {
     "  /remote",
     "  /remote status",
     "  /remote login [provider|list]",
+    "  /remote pair [confirm <code> | status | cancel]",
     "  /remote logout"
   ].join("\n");
 }

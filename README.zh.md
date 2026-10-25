@@ -233,6 +233,19 @@ identity key 校验。服务端可以协调连接并看到必要的网络元数�
 工具输出、Workspace 路径或 远端文件内容。握手、密钥生命周期、可见元数据、重放保护和
 安全边界详见[端到端加密](docs/end-to-end-encryption.md)。
 
+### 设备配对（可选，推荐开启）
+
+服务端是公钥的唯一来源，因此它理论上可以在首次连接时替换公钥完成中间人。配对用两个
+带外通道消除这个可能：
+
+1. 在本机执行 `/remote pair`，屏幕显示二维码（不经过服务器）；
+2. 用手机扫码，手机显示 12 位确认码；
+3. 在本机输入 `/remote pair confirm <确认码>`。
+
+确认码由双方公钥和一次性 nonce 派生，比对通过后双方公钥被本地固定，此后服务器无法替换。
+设置页的「配对 Controller」提供同样的界面。把 `identity.requireVerifiedPeer` 设为 `true`
+后，未配对设备一律无法连接。设计见[最小安全通道](docs/design/minimal-secure-channel.md)。
+
 ## 网络与传输
 
 Host 只建立出站连接，不监听公网端口，也不要求路由器端口转发。
@@ -259,6 +272,7 @@ OAuth 登录方式由服务端动态提供。使用 `ds-harness-remote login lis
 
 - 会话流量经过端到端加密；服务端只中继密文，不保存会话明文或设备私钥。
 - Server membership 与 Host 本地固定的 peer identity 必须同时授权连接。
+- 身份配对使用二维码与人工输入的确认码两个带外通道；`requireVerifiedPeer` 打开后未配对设备无法建立业务连接。
 - 交互终端使用 Host 本地的 `terminal.enabled`（默认开启），以 Host 用户身份运行，独立于 Agent 审批；
 - 不开放通用工具 RPC 或远程桌面。
 - Workspace 选择器只列出文件夹，并且只返回受限的只读目录元数据。

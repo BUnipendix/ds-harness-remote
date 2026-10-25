@@ -1,6 +1,26 @@
 import type { Messages } from './types'
 
 const deDE = {
+  pairing: {
+    pinned: "Host-Schlüssel gespeichert",
+    confirmOnComputer: "Bestätige die Kopplung am Computer",
+    title: "Gerät koppeln",
+    hint: "Scanne den QR-Code auf dem Computer",
+    wrongDevice: 'Dieser Code gehört zu einem anderen Gerät. Bitte erneut scannen.',
+    errorExpired: 'Dieser Kopplungscode ist abgelaufen. Erzeuge am Rechner einen neuen.',
+    errorInvalid: 'Das ist kein gültiger Kopplungscode. Richte die Kamera auf den Code am Rechner.',
+    errorSas: 'Die Codes stimmen nicht überein. Vergleiche sie erneut.',
+    hintFor: (name: string) => `Scanne den Code auf ${name}`,
+    permission: "Für das Scannen des Kopplungscodes ist Kamerazugriff nötig",
+    grant: "Kamera erlauben",
+    codeTitle: "Vergleiche diesen Code mit dem am Computer",
+    matched: "Codes stimmen überein – gekoppelt",
+    failed: "Kopplung fehlgeschlagen",
+    retry: "Erneut scannen",
+    connect: "Mit Rechner verbinden",
+    connecting: "Verbindung wird hergestellt…",
+    done: "Fertig",
+  },
   bots: {
     btw: "Side question",
     btwHint: "Use /btw to ask without interrupting or adding to the Bot’s context.",
@@ -110,6 +130,7 @@ const deDE = {
     cacheRestoreFailed: "Browsereinstellungen konnten nicht wiederhergestellt werden. Der Online-Verlauf ist weiterhin verfügbar.",
     conversationMissing: "Diese Konversation ist auf dem aktuellen Host nicht mehr verfügbar.",
     unknownHost: "Der Benachrichtigungshost ist kein vertrauenswürdiges Gerät für das aktuelle Konto.",
+    pairFirst: 'Dieser Rechner ist noch nicht gekoppelt. Scanne zuerst seinen Code.',
     starred: "Lieblingsgespräche",
     running: "In Bearbeitung",
     recent: "Zuletzt geöffnet",
@@ -225,8 +246,8 @@ const deDE = {
   },
   devices: {
     rename: "Umbenennen", renameTitle: "Gerät umbenennen", namePlaceholder: "Geben Sie einen Gerätenamen ein", saveName: "Speichern", renameHint: "Der neue Name wird für alle Gerätelisten Ihres Kontos freigegeben.",
-    title: "Geräte", myDevices: "Meine Geräte", lead: "Wählen Sie ein Gerät, um Ihre Arbeit fortzusetzen", footer: "Setzen Sie Ihre Arbeit jederzeit fort.", favorites: "Favoriten", recent: "Kürzlich besucht", openFavorite: (title: string, device: string) => `Öffnen Sie „${title}“ auf ${device} aus den Favoriten`, openRecent: (title: string, device: string) => `Kürzlich besuchtes „${title}“ auf ${device} öffnen`, removeFavorite: (title: string) => `Entfernen Sie „${title}“ aus den Favoriten`, emptyTitle: "Keine Geräte verfügbar", emptyBody: "Installieren Sie das DSH Remote-Plugin auf Ihrem Computer und melden Sie sich bei demselben Konto an. Das Gerät wird hier angezeigt.", options: "Gerät verwalten", encrypted: "Sichere Verbindung",
-    connectionInterrupted: "Verbindung unterbrochen", trustExplanation: "Nach der Bestätigung merkt sich dieses Telefon die sichere Identität des Geräts. Wenn sich diese Identität ändert, wird die Verbindung zum Schutz Ihrer Daten unterbrochen.", trust: "Vertrauen und weitermachen", connectReady: "Stellen Sie eine Verbindung her, um Gespräche auf Ihrem Computer anzuzeigen und fortzusetzen.", offlineHelp: "Dieses Gerät ist offline. Stellen Sie sicher, dass das DSH Remote-Plugin auf Ihrem Computer ausgeführt wird.", secureConnect: "Sicher verbinden",
+    title: "Geräte", myDevices: "Meine Geräte", lead: "Wählen Sie ein Gerät, um Ihre Arbeit fortzusetzen", detailHint: 'Lange drücken für Details und erneutes Koppeln', footer: "Setzen Sie Ihre Arbeit jederzeit fort.", favorites: "Favoriten", recent: "Kürzlich besucht", openFavorite: (title: string, device: string) => `Öffnen Sie „${title}“ auf ${device} aus den Favoriten`, openRecent: (title: string, device: string) => `Kürzlich besuchtes „${title}“ auf ${device} öffnen`, removeFavorite: (title: string) => `Entfernen Sie „${title}“ aus den Favoriten`, emptyTitle: "Keine Geräte verfügbar", emptyBody: "Installieren Sie das DSH Remote-Plugin auf Ihrem Computer und melden Sie sich bei demselben Konto an. Das Gerät wird hier angezeigt.", options: "Gerät verwalten", encrypted: "Sichere Verbindung",
+    connectionInterrupted: "Verbindung unterbrochen", trustExplanation: "Nach der Bestätigung merkt sich dieses Telefon die sichere Identität des Geräts. Wenn sich diese Identität ändert, wird die Verbindung zum Schutz Ihrer Daten unterbrochen.", badgePaired: 'Gekoppelt', badgePending: 'Ausstehend', badgeUnpaired: 'Nicht gekoppelt', pairPendingExplanation: 'Der Schlüssel dieses Rechners ist bereits gespeichert. Bestätige den Kopplungscode am Rechner und fahre dann hier fort.', pairExplanation: 'Dieses Gerät ist noch nicht mit diesem Telefon gekoppelt. Erzeuge am Rechner einen Kopplungscode, scanne ihn hier und bestätige denselben Code auf beiden Bildschirmen.', repair: 'Neu koppeln', pairNow: 'Zum Koppeln scannen', trust: "Vertrauen und weitermachen", connectReady: "Stellen Sie eine Verbindung her, um Gespräche auf Ihrem Computer anzuzeigen und fortzusetzen.", offlineHelp: "Dieses Gerät ist offline. Stellen Sie sicher, dass das DSH Remote-Plugin auf Ihrem Computer ausgeführt wird.", secureConnect: "Sicher verbinden",
     connectingTitle: "Gerät anschließen", connecting: "Verbinden", connectionReady: "Bereit", retryConnection: "Erneut verbinden", cancelConnection: "Verbindung abbrechen", openInfo: "Geräte- und Verbindungsinformationen anzeigen",
     connectionProbeLabels: {
       lan: "Lokalen direkten Pfad prüfen",

@@ -1,6 +1,26 @@
 import type { Messages } from './types'
 
 const jaJP = {
+  pairing: {
+    pinned: "ホストの鍵を保存しました",
+    confirmOnComputer: "パソコン側で確認してください",
+    title: "デバイスをペアリング",
+    hint: "パソコンに表示された QR コードをスキャン",
+    wrongDevice: '別のデバイスのコードです。もう一度スキャンしてください。',
+    errorExpired: 'ペアリングコードの有効期限が切れました。パソコンで再生成してください。',
+    errorInvalid: '有効なペアリングコードではありません。パソコンのコードを写してください。',
+    errorSas: '確認コードが一致しません。もう一度照合してください。',
+    hintFor: (name: string) => `${name} に表示されているコードをスキャンします`,
+    permission: "ペアリングコードのスキャンにはカメラ権限が必要です",
+    grant: "カメラを許可",
+    codeTitle: "パソコンの確認コードと照合してください",
+    matched: "一致しました。ペアリング完了",
+    failed: "ペアリングに失敗しました",
+    retry: "再スキャン",
+    connect: "パソコンに接続",
+    connecting: "接続しています…",
+    done: "完了",
+  },
   bots: {
     btw: "Side question",
     btwHint: "Use /btw to ask without interrupting or adding to the Bot’s context.",
@@ -110,6 +130,7 @@ const jaJP = {
     cacheRestoreFailed: "閲覧設定を復元できませんでした。オンライン履歴は引き続き利用可能です。",
     conversationMissing: "この会話は現在のホストでは利用できなくなりました。",
     unknownHost: "通知ホストは現在のアカウントにとって信頼できるデバイスではありません。",
+    pairFirst: 'このパソコンはまだペアリングされていません。先にコードをスキャンしてください。',
     starred: "お気に入りの会話",
     running: "実行中",
     recent: "最近開いた会話",
@@ -225,8 +246,8 @@ const jaJP = {
   },
   devices: {
     rename: "名前の変更", renameTitle: "デバイスの名前を変更する", namePlaceholder: "デバイス名を入力してください", saveName: "保存", renameHint: "新しい名前は、アカウントのデバイス リスト全体で共有されます。",
-    title: "デバイス", myDevices: "私のデバイス", lead: "作業を続けるためのデバイスを選択してください", footer: "いつでも作業を続けてください。", favorites: "お気に入り", recent: "最近アクセスした項目", openFavorite: (title: string, device: string) => `お気に入りから ${device} の「${title}」を開きます`, openRecent: (title: string, device: string) => `${device} で最近アクセスした「${title}」を開きます`, removeFavorite: (title: string) => `「${title}」をお気に入りから削除します`, emptyTitle: "利用可能なデバイスがありません", emptyBody: "DSH リモート プラグインをコンピュータにインストールし、同じアカウントにサインインします。ここにデバイスが表示されます。", options: "デバイスの管理", encrypted: "安全な接続",
-    connectionInterrupted: "接続が中断されました", trustExplanation: "確認後、この電話はデバイスの安全な ID を記憶します。その ID が変更されると、データを保護するために接続が停止します。", trust: "信頼して続けてください", connectReady: "接続すると、コンピュータ上で会話を表示したり、会話を継続したりできます。", offlineHelp: "このデバイスはオフラインです。 DSH リモート プラグインがコンピュータ上で実行されていることを確認してください。", secureConnect: "安全に接続する",
+    title: "デバイス", myDevices: "私のデバイス", lead: "作業を続けるためのデバイスを選択してください", detailHint: '長押しで詳細と再ペアリングを表示します', footer: "いつでも作業を続けてください。", favorites: "お気に入り", recent: "最近アクセスした項目", openFavorite: (title: string, device: string) => `お気に入りから ${device} の「${title}」を開きます`, openRecent: (title: string, device: string) => `${device} で最近アクセスした「${title}」を開きます`, removeFavorite: (title: string) => `「${title}」をお気に入りから削除します`, emptyTitle: "利用可能なデバイスがありません", emptyBody: "DSH リモート プラグインをコンピュータにインストールし、同じアカウントにサインインします。ここにデバイスが表示されます。", options: "デバイスの管理", encrypted: "安全な接続",
+    connectionInterrupted: "接続が中断されました", trustExplanation: "確認後、この電話はデバイスの安全な ID を記憶します。その ID が変更されると、データを保護するために接続が停止します。", badgePaired: 'ペアリング済み', badgePending: '確認待ち', badgeUnpaired: '未ペアリング', pairPendingExplanation: 'このパソコンの鍵はスキャンで保存済みです。パソコン側でペアリングコードを確認してから、ここで接続してください。', pairExplanation: 'このデバイスはまだこのスマートフォンとペアリングされていません。パソコンでペアリングコードを生成し、ここでスキャンして、両方の画面で同じコードを確認してから接続します。', repair: 'ペアリングし直す', pairNow: 'スキャンしてペアリング', trust: "信頼して続けてください", connectReady: "接続すると、コンピュータ上で会話を表示したり、会話を継続したりできます。", offlineHelp: "このデバイスはオフラインです。 DSH リモート プラグインがコンピュータ上で実行されていることを確認してください。", secureConnect: "安全に接続する",
     connectingTitle: "デバイスを接続する", connecting: "接続中", connectionReady: "準備ができて", retryConnection: "再度接続してください", cancelConnection: "接続をキャンセルする", openInfo: "デバイスと接続情報の表示",
     connectionProbeLabels: {
       lan: "ローカルダイレクトパスのプローブ",

@@ -12,6 +12,12 @@ export interface Config {
   deviceName?: string
   terminal?: { enabled?: boolean }
   hostControl?: { enabled?: boolean }
+  /**
+   * Peer identity policy. `requireVerifiedPeer` refuses to use any peer key
+   * that was learned from a Server descriptor instead of an out-of-band
+   * pairing, which is what makes a hostile Server unable to MITM.
+   */
+  identity?: { requireVerifiedPeer?: boolean }
   loopback?: { ports?: number[] }
   forceRelay?: boolean
   logLevel?: 'debug' | 'info' | 'warn' | 'error'
@@ -71,6 +77,7 @@ export interface ResolvedConfig {
   }
   terminal: { enabled: boolean }
   hostControl?: { enabled: boolean }
+  identity: { requireVerifiedPeer: boolean }
   loopback: { ports: number[] }
   codex: ResolvedCodexConfig
   cursor: ResolvedCursorConfig
@@ -98,6 +105,7 @@ const entryConfigSchema = s.object({
   deviceName: s.string(),
   terminal: s.object({ enabled: s.boolean() }),
   hostControl: s.object({ enabled: s.boolean() }),
+  identity: s.object({ requireVerifiedPeer: s.boolean() }),
   loopback: s.object({ ports: s.array(s.number()) }),
   forceRelay: s.boolean(),
   logLevel: s.union(['debug', 'info', 'warn', 'error'] as const),
@@ -151,6 +159,7 @@ const configSchema = z.object({
   deviceName: z.string().trim().min(1).max(80).optional(),
   terminal: z.object({ enabled: z.boolean().optional() }).strict().optional(),
   hostControl: z.object({ enabled: z.boolean().optional() }).strict().optional(),
+  identity: z.object({ requireVerifiedPeer: z.boolean().optional() }).strict().optional(),
   loopback: z.object({ ports: z.array(z.number().int().min(1024).max(65535)).max(16).optional() }).strict().optional(),
   forceRelay: z.boolean().optional(),
   logLevel: z.enum(['debug', 'info', 'warn', 'error']).optional(),
@@ -191,6 +200,10 @@ export function resolveConfig(input: ConfigInput = {}, env: NodeJS.ProcessEnv = 
     ...(serverUrl === undefined ? {} : { serverUrl }),
     deviceName: parsed.deviceName ?? env.DSH_REMOTE_DEVICE_NAME ?? hostname(),
     hostControl: { enabled: parsed.hostControl?.enabled ?? true },
+    // Verified peers are the default: a key learned from the Server descriptor
+    // proves nothing about who is connecting, so an unpaired Controller must go
+    // through the live pairing offer before any business frame is accepted.
+    identity: { requireVerifiedPeer: parsed.identity?.requireVerifiedPeer ?? env.DSH_REMOTE_REQUIRE_VERIFIED_PEER !== 'false' },
     terminal: { enabled: parsed.terminal?.enabled ?? (env.DSH_REMOTE_TERMINAL_ENABLED === undefined || env.DSH_REMOTE_TERMINAL_ENABLED === 'true') },
     loopback: { ports: [...new Set(parsed.loopback?.ports ?? [])] },
     forceRelay: parsed.forceRelay ?? false,

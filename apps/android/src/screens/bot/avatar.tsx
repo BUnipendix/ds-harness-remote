@@ -29,7 +29,7 @@ export function BotAvatar({ bot, size = 40 }: { bot: Pick<BotEntry, 'id' | 'avat
   const fill = /^#[0-9a-f]{6}$/i.test(color) ? color : (assets.inks as Record<string, string[]>)[color]?.[scheme === 'dark' ? 1 : 0] ?? assets.inks.deepseek[0]
   return <Svg width={size} height={size} viewBox="0 0 100 100" accessible={false}>
     <Defs>
-      <LinearGradient id={`${uid}paint`} x1="0" y1="0" x2="1" y2="1"><Stop offset="0" stopColor="#A4FFB0" /><Stop offset=".42" stopColor="#00F0E4" /><Stop offset="1" stopColor="#2E9EF7" /></LinearGradient>
+      <LinearGradient id={`${uid}paint`} x1="0" y1="0" x2="1" y2="1"><Stop offset="0" stopColor="#A4FFB0" /><Stop offset="42%" stopColor="#00F0E4" /><Stop offset="1" stopColor="#2E9EF7" /></LinearGradient>
       <Mask id={`${uid}eyes`} x="0" y="0" width="100" height="100" maskUnits="userSpaceOnUse">
         <Rect width="100" height="100" fill="white" />
         {character.eyes.map(([x, y, w, h, tilt], i) => <Rect key={i} x={x - w / 2} y={y - h / 2} width={w} height={h} rx={w / 2} fill="black" rotation={tilt} origin={`${x}, ${y}`} />)}

@@ -249,6 +249,20 @@ export class ClientConnection {
     if (existing !== undefined && existing.publicKey !== descriptor.identityKey) {
       throw new ClientModeError('PEER_IDENTITY_MISMATCH', 'The authorized Host identity key changed unexpectedly.')
     }
+    // A Server-supplied key only proves what the Server claims. Unless this
+    // device pinned the Host through an out-of-band pairing, the Server can sit
+    // in the middle of the Noise channel, so refusing is the only safe answer
+    // when the operator asked for verified peers.
+    if (this.context.config.identity.requireVerifiedPeer
+      && (existing === undefined || existing.verification === 'unverified')) {
+      throw new ClientModeError('PEER_UNVERIFIED', 'This Host is not paired on this device yet; run pairing before connecting.')
+    }
+    if (existing === undefined) {
+      this.context.logger.warn('trusting an unverified Host identity supplied by the Server', {
+        targetDeviceId: shortId(descriptor.deviceId),
+        verification: 'unverified',
+      })
+    }
     if (existing !== undefined
       && existing.membershipId === descriptor.membershipId
       && existing.name === descriptor.name

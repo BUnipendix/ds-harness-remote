@@ -128,11 +128,12 @@ export interface AppState {
   pollQrLogin(baseUrl: string, qrId: string): Promise<OAuthQrPollResult | undefined>
   completeQrLogin(baseUrl: string, token: string, method: RedirectLoginMethod): Promise<boolean>
   refreshDevices(): Promise<void>
+  /** Forget the out-of-band confirmation and force a fresh pairing scan. */
+  resetPairing(deviceId: string): Promise<boolean>
   refreshWorkspaces(backend?: AgentBackend): Promise<void>
   refreshSessionStatus(): Promise<void>
   refreshConnectionNetworkDetails(): Promise<void>
   resumeConnection(): Promise<void>
-  trustDevice(device: RemoteDevice): Promise<boolean>
   forgetDevice(deviceId: string): Promise<boolean>
   renameDevice(deviceId: string, name: string): Promise<boolean>
   connectDevice(device: RemoteDevice, options?: { forceRelay?: boolean }): Promise<boolean>

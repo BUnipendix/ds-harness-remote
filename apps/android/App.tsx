@@ -9,6 +9,7 @@ import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-
 import { ChatScreen } from './src/screens/chat-screen'
 import { ConnectionScreen, DeviceDetailScreen, DevicesScreen } from './src/screens/device-screens'
 import { AboutScreen, HomeActionsMenu, ServerSetupScreen, SettingsScreen } from './src/screens/setup-screens'
+import { PairingScreen } from './src/screens/pairing-screen'
 import { WorkspacesScreen } from './src/screens/workspaces-screen'
 import { stopConnectionRecovery, useAppStore } from './src/state/store'
 import { ForegroundConnectionRecovery } from './src/services/connection-recovery'
@@ -34,6 +35,7 @@ type Route =
   | { name: 'chat' }
   | { name: 'settings' }
   | { name: 'about' }
+  | { name: 'pairing'; deviceId?: string }
 
 export default function App() {
   const locales = useLocales()
@@ -114,6 +116,13 @@ function AppNavigator() {
       reset({ name: 'workspaces' })
       return
     }
+    // Only an out-of-band pin can open a tunnel: the Host refuses every other
+    // peer, so an unpaired row leads to the scan flow instead of a connection
+    // that is guaranteed to be rejected.
+    if (device.verification !== 'pairing' || device.confirmedAt === undefined) {
+      push({ name: 'pairing', deviceId: device.deviceId })
+      return
+    }
     push(device.trusted && device.online
       ? { name: 'connecting', deviceId: device.deviceId }
       : { name: 'device', deviceId: device.deviceId })
@@ -192,12 +201,21 @@ function AppNavigator() {
   }, [])
   useEffect(() => {
     if (bootPhase !== 'ready' || !browseReady || !linksReady || !didChooseInitialRoute.current || reauthRequired || devices.length === 0) return
+    // A tunnel only opens for an out-of-band pin; every automatic path below has
+    // to respect that, or startup would replay the connections the Host refuses.
+    const canOpenTunnel = (device: (typeof devices)[number]) =>
+      device.trusted === true && device.verification === 'pairing' && device.confirmedAt !== undefined
     if (pendingConversation !== undefined) {
       autoRestored.current = true
       const target = pendingConversation
-      const device = devices.find(item => item.deviceId === target.deviceId && item.trusted)
+      const device = devices.find(item => item.deviceId === target.deviceId)
       setPendingConversation(undefined)
       if (device === undefined) {useAppStore.setState({error: zhCN.comfort.unknownHost}); return}
+      if (!canOpenTunnel(device)) {
+        useAppStore.setState({error: zhCN.comfort.pairFirst})
+        push({name: 'pairing', deviceId: device.deviceId})
+        return
+      }
       if (selectedDevice?.deviceId === device.deviceId && useAppStore.getState().connection.phase === 'connected') void openKnownSession(target.sessionId)
       else push({name: 'connecting', deviceId: device.deviceId, sessionId: target.sessionId})
       return
@@ -207,16 +225,16 @@ function AppNavigator() {
     const memory = useBrowseMemory.getState(), last = memory.last
     if (routeRef.current.name !== 'devices') return
     if (memory.resume && last) {
-      const device = devices.find(item => item.deviceId === last.deviceId && item.trusted && item.online)
-      if (device && browseScope({config, selectedDevice: device}) === last.scope) {
+      const device = devices.find(item => item.deviceId === last.deviceId && item.online)
+      if (device && canOpenTunnel(device) && browseScope({config, selectedDevice: device}) === last.scope) {
         push({name: 'connecting', deviceId: device.deviceId, ...(memory.hostModes[last.scope] === 'bot' ? {} : {sessionId: last.sessionId})})
         return
       }
     }
-    // Only skip device selection when there is exactly one trusted, online host.
+    // Only skip device selection when there is exactly one paired, online host.
     // The one-shot guard also lets users return here or cancel without a loop.
     const onlyDevice = devices.length === 1 ? devices[0] : undefined
-    if (onlyDevice?.trusted && onlyDevice.online) openDevice(onlyDevice)
+    if (onlyDevice !== undefined && canOpenTunnel(onlyDevice) && onlyDevice.online) openDevice(onlyDevice)
   }, [bootPhase, browseReady, linksReady, devices, pendingConversation, reauthRequired, route.name])
 
   // Zhihu OAuth deep link: dshremote://oauth?token=... completes the
@@ -366,9 +384,11 @@ function AppNavigator() {
       {route.name === 'devices' && (
         <DevicesScreen
           onDevice={openDevice}
+          onDeviceDetail={device => push({ name: 'device', deviceId: device.deviceId })}
           onBack={devicesIsRoot ? undefined : pop}
           onMore={devicesIsRoot ? openHomeMenu : undefined}
           onShortcut={devicesIsRoot ? openShortcut : undefined}
+          onPair={() => push({ name: 'pairing' })}
         />
       )}
       {route.name === 'connecting' && deviceForRoute !== undefined && (
@@ -386,10 +406,34 @@ function AppNavigator() {
         />
       )}
       {route.name === 'connecting' && deviceForRoute === undefined && <MissingRoute onBack={() => reset({ name: 'devices' })} />}
+      {route.name === 'pairing' && (
+        <PairingScreen
+          visible
+          expectedDeviceId={route.deviceId}
+          expectedDeviceName={route.deviceId === undefined
+            ? undefined
+            : devices.find(item => item.deviceId === route.deviceId)?.name}
+          onClose={() => {
+            if (routes.length > 1) pop()
+            else reset({ name: 'devices' })
+          }}
+          // The code stays on screen until the Host lets the tunnel through, so
+          // the connection runs from here instead of navigating away first.
+          onConnect={async hostDeviceId => {
+            const store = useAppStore.getState()
+            await store.refreshDevices()
+            const device = useAppStore.getState().devices.find(item => item.deviceId === hostDeviceId)
+            if (device === undefined) return false
+            return await store.connectDevice(device)
+          }}
+          onDone={() => reset({ name: 'workspaces' })}
+        />
+      )}
       {route.name === 'device' && deviceForRoute !== undefined && <DeviceDetailScreen
         device={deviceForRoute}
         onBack={pop}
         onConnect={() => replace({ name: 'connecting', deviceId: deviceForRoute.deviceId })}
+        onPair={() => replace({ name: 'pairing', deviceId: deviceForRoute.deviceId })}
         onWorkspaces={route.source === 'workspaces' ? undefined : goHomeWorkspaces}
       />}
       {route.name === 'device' && deviceForRoute === undefined && <MissingRoute onBack={() => reset({ name: 'devices' })} />}

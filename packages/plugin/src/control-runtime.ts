@@ -110,6 +110,25 @@ export class PluginControlRuntime {
         }
         return ok(status)
       }
+      if (endpoint === 'host.pair.begin') {
+        if (this.host?.beginPairing === undefined) throw new ClientModeError('METHOD_NOT_ALLOWED', 'This plugin is not running as a Host.')
+        return ok(this.host.beginPairing())
+      }
+      if (endpoint === 'host.pair.status') {
+        return ok(this.host?.pendingPairing?.() ?? null)
+      }
+      if (endpoint === 'host.pair.confirm') {
+        if (this.host?.confirmPairing === undefined) throw new ClientModeError('METHOD_NOT_ALLOWED', 'This plugin is not running as a Host.')
+        const value = record(payload)
+        if (typeof value.code !== 'string' || value.code.length === 0 || value.code.length > 32) {
+          throw new ClientModeError('INVALID_MESSAGE', 'A confirmation code is required.')
+        }
+        return ok(await this.host.confirmPairing(value.code))
+      }
+      if (endpoint === 'host.pair.cancel') {
+        this.host?.cancelPairing?.()
+        return ok({ status: 'cancelled' })
+      }
       if (endpoint === 'host.reconnect') {
         if (this.host === undefined) throw new ClientModeError('METHOD_NOT_ALLOWED', 'This plugin is not running as a Host.')
         this.host.reconnectHost()

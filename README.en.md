@@ -234,6 +234,21 @@ network metadata, but it cannot read session messages, prompts, tool output, wor
 remote file contents. See [End-to-end encryption](docs/end-to-end-encryption.md) for the handshake,
 key lifecycle, visible metadata, replay protection, and security limits.
 
+### Device pairing (optional, recommended)
+
+The service is the only source of peer public keys, so on its own it could substitute a key during
+the first connection and sit in the middle. Pairing removes that with two out-of-band channels:
+
+1. Run `/remote pair` on this machine; the terminal renders a QR code that never leaves the device.
+2. Scan it with the phone; the phone shows a 12-character confirmation code.
+3. Type it back with `/remote pair confirm <code>`.
+
+The code is derived from both public keys and a single-use nonce, so a matching code can only come
+from that exact key pair. After pairing, both keys stay pinned locally and the service cannot
+replace them. The same flow is available from the "Pair a Controller" panel in settings. Set
+`identity.requireVerifiedPeer` to `true` to refuse every unpaired device. See
+[Minimal secure channel](docs/design/minimal-secure-channel.md).
+
 ## Network and transport
 
 The Host opens outbound connections only; it does not listen on a public port or require router

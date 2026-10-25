@@ -44,6 +44,7 @@ import { harnessSessionGeneration } from './harness-version.js'
 import type { HostIdentity, IdentityStore } from './identity-store.js'
 import { uuidV7 } from './ids.js'
 import type { SafeLogger } from './logging.js'
+import { deriveSas, parsePairingOffer } from './pairing.js'
 import { LoopbackPreview } from './loopback-preview.js'
 import { RemoteHarnessApiProxy } from './remote-api-proxy.js'
 import { RemoteTypertGateway } from './remote-typert-gateway.js'
@@ -865,6 +866,40 @@ export class ClientModeRuntime {
     signal?.throwIfAborted()
     if (this.closed || this.connected !== remote) {
       throw new ClientModeError('CANCELLED', 'The Remote workspace request was superseded or closed.')
+    }
+  }
+
+  /**
+   * Pin a Host from a pairing code scanned locally, and return the confirmation
+   * code to read out loud to that Host. Both values come from the QR payload and
+   * this device's own key, never from the Server.
+   */
+  async pairWithOffer(uri: string): Promise<{
+    hostDeviceId: string
+    hostDeviceName?: string
+    confirmationCode: string
+    expiresAt: number
+  }> {
+    const identity = this.requireIdentity()
+    const offer = parsePairingOffer(uri)
+    await this.identities.pinPeer({
+      deviceId: offer.hostDeviceId,
+      name: offer.hostDeviceName ?? 'Host',
+      // The real platform arrives with the first descriptor; pinPeer keeps the
+      // out-of-band verification state when only metadata changes.
+      platform: 'unknown',
+      publicKey: offer.hostPublicKey,
+      verification: 'pairing',
+    })
+    return {
+      hostDeviceId: offer.hostDeviceId,
+      ...(offer.hostDeviceName === undefined ? {} : { hostDeviceName: offer.hostDeviceName }),
+      confirmationCode: deriveSas({
+        hostPublicKey: offer.hostPublicKey,
+        clientPublicKey: identity.publicKey,
+        nonce: offer.nonce,
+      }),
+      expiresAt: offer.expiresAt,
     }
   }
 

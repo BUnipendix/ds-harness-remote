@@ -1,4 +1,24 @@
 const zhTW = {
+  pairing: {
+    pinned: "已儲存這台電腦的公鑰",
+    confirmOnComputer: "請在電腦上核對並確認配對",
+    title: "配對裝置",
+    hint: "掃描電腦上顯示的二維碼",
+    wrongDevice: '掃到的不是這台裝置，請重新掃描',
+    errorExpired: '配對碼已過期，請在電腦上重新產生',
+    errorInvalid: '這不是有效的配對碼，請對準電腦上的 QR Code',
+    errorSas: '確認碼不一致，請重新比對',
+    hintFor: (name: string) => `掃描 ${name} 上顯示的 QR Code`,
+    permission: "需要相機權限才能掃描配對碼",
+    grant: "授予相機權限",
+    codeTitle: "與電腦螢幕上的確認碼逐位核對",
+    matched: "兩碼一致，已配對",
+    failed: "配對失敗",
+    retry: "重新掃描",
+    connect: "連接電腦",
+    connecting: "正在連接電腦…",
+    done: "完成",
+  },
   bots: {
     btw: "Side question",
     btwHint: "Use /btw to ask without interrupting or adding to the Bot’s context.",
@@ -108,6 +128,7 @@ const zhTW = {
     cacheRestoreFailed: "本機瀏覽狀態未能恢復，聯網歷史不受影響。",
     conversationMissing: "這條對話已不在當前主機的可用列表中。",
     unknownHost: "通知對應的主機不在當前賬號的已信任裝置中。",
+    pairFirst: '這台電腦還沒有配對，請先掃碼配對。',
     starred: "收藏對話",
     running: "進行中",
     recent: "最近訪問",
@@ -223,8 +244,8 @@ const zhTW = {
   },
   devices: {
     rename: '重新命名', renameTitle: '修改裝置名稱', namePlaceholder: '輸入裝置名稱', saveName: '儲存', renameHint: '新名稱會同步到賬號下的裝置列表。',
-    title: '裝置', myDevices: '我的裝置', lead: '選擇一臺裝置，繼續你的工作', footer: '隨時繼續你的工作。', favorites: '收藏夾', recent: '最近訪問', openFavorite: (title: string, device: string) => `開啟收藏夾中 ${device} 上的“${title}”`, openRecent: (title: string, device: string) => `開啟最近訪問的“${title}”（${device}）`, removeFavorite: (title: string) => `從收藏夾移除“${title}”`, emptyTitle: '還沒有可用裝置', emptyBody: '在電腦上安裝 DSH Remote 外掛並登入同一賬號，裝置就會出現在這裡。', options: '管理裝置', encrypted: '安全連線',
-    connectionInterrupted: '連線已斷開', trustExplanation: '確認後，此手機會記住這臺裝置的安全身份。如果身份發生變化，將停止連線以保護你的資料。', trust: '信任並繼續', connectReady: '連線後即可檢視並繼續電腦上的對話。', offlineHelp: '這臺裝置已離線。請確認電腦上的 DSH Remote 外掛正在執行。', secureConnect: '連線裝置',
+    title: '裝置', myDevices: '我的裝置', lead: '選擇一臺裝置，繼續你的工作', detailHint: '長按裝置可查看詳情和重新配對', footer: '隨時繼續你的工作。', favorites: '收藏夾', recent: '最近訪問', openFavorite: (title: string, device: string) => `開啟收藏夾中 ${device} 上的“${title}”`, openRecent: (title: string, device: string) => `開啟最近訪問的“${title}”（${device}）`, removeFavorite: (title: string) => `從收藏夾移除“${title}”`, emptyTitle: '還沒有可用裝置', emptyBody: '在電腦上安裝 DSH Remote 外掛並登入同一賬號，裝置就會出現在這裡。', options: '管理裝置', encrypted: '安全連線',
+    connectionInterrupted: '連線已斷開', trustExplanation: '確認後，此手機會記住這臺裝置的安全身份。如果身份發生變化，將停止連線以保護你的資料。', badgePaired: '已配對', badgePending: '待確認', badgeUnpaired: '未配對', pairPendingExplanation: '已經掃碼保存了這台電腦的公鑰。請在電腦上確認配對碼，確認後返回這裡繼續連線。', pairExplanation: '這台裝置還沒有與手機完成配對。請在電腦上產生配對碼，再用手機掃描，雙方核對同一串確認碼後才建立連線。', repair: '重新配對', pairNow: '掃碼配對', trust: '信任並繼續', connectReady: '連線後即可檢視並繼續電腦上的對話。', offlineHelp: '這臺裝置已離線。請確認電腦上的 DSH Remote 外掛正在執行。', secureConnect: '連線裝置',
     connectingTitle: '連線裝置', connecting: '正在連線', connectionReady: '已就緒', retryConnection: '重新連線', cancelConnection: '取消連線', openInfo: '檢視裝置和連線資訊',
     connectionProbeLabels: {
       lan: '探測區域網直連',

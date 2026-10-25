@@ -1,6 +1,26 @@
 import type { Messages } from './types'
 
 const esES = {
+  pairing: {
+    pinned: "Clave del equipo guardada",
+    confirmOnComputer: "Confirma la vinculación en el ordenador",
+    title: "Vincular un dispositivo",
+    hint: "Escanea el código QR que muestra el ordenador",
+    wrongDevice: 'Ese código pertenece a otro dispositivo. Escanéalo de nuevo.',
+    errorExpired: 'Este código ha caducado. Genera uno nuevo en el ordenador.',
+    errorInvalid: 'No es un código válido. Enfoca el código del ordenador.',
+    errorSas: 'Los códigos no coinciden. Compáralos de nuevo.',
+    hintFor: (name: string) => `Escanea el código que se muestra en ${name}`,
+    permission: "Se necesita acceso a la cámara para escanear el código",
+    grant: "Permitir cámara",
+    codeTitle: "Compara este código con el del ordenador",
+    matched: "Coinciden: vinculado",
+    failed: "No se pudo vincular",
+    retry: "Escanear de nuevo",
+    connect: "Conectar al ordenador",
+    connecting: "Conectando…",
+    done: "Listo",
+  },
   bots: {
     btw: "Side question",
     btwHint: "Use /btw to ask without interrupting or adding to the Bot’s context.",
@@ -110,6 +130,7 @@ const esES = {
     cacheRestoreFailed: "No se pudieron restaurar las preferencias de navegación. El historial en línea todavía está disponible.",
     conversationMissing: "Esta conversación ya no está disponible en el anfitrión actual.",
     unknownHost: "La notificación El host no es un dispositivo confiable para la cuenta actual.",
+    pairFirst: 'Este ordenador aún no está emparejado. Escanea su código primero.',
     starred: "Conversaciones favoritas",
     running: "En curso",
     recent: "Visitas recientes",
@@ -225,8 +246,8 @@ const esES = {
   },
   devices: {
     rename: "Rebautizar", renameTitle: "Cambiar nombre del dispositivo", namePlaceholder: "Introduzca un nombre de dispositivo", saveName: "Ahorrar", renameHint: "El nuevo nombre se comparte en todas las listas de dispositivos de su cuenta.",
-    title: "Dispositivos", myDevices: "Mis dispositivos", lead: "Elige un dispositivo para continuar tu trabajo", footer: "Continúe su trabajo en cualquier momento.", favorites: "Favoritos", recent: "Visitado recientemente", openFavorite: (title: string, device: string) => `Abra “${title}” en ${device} desde Favoritos`, openRecent: (title: string, device: string) => `Abrir “${title}” visitado recientemente en ${device}`, removeFavorite: (title: string) => `Eliminar "${title}" de Favoritos`, emptyTitle: "No hay dispositivos disponibles", emptyBody: "Instale el complemento DSH Remote en su computadora e inicie sesión en la misma cuenta. El dispositivo aparecerá aquí.", options: "Administrar dispositivo", encrypted: "Conexión segura",
-    connectionInterrupted: "Conexión interrumpida", trustExplanation: "Después de la confirmación, este teléfono recuerda la identidad segura del dispositivo. Si esa identidad cambia, la conexión se detiene para proteger sus datos.", trust: "Confía y continúa", connectReady: "Conéctese para ver y continuar conversaciones en su computadora.", offlineHelp: "Este dispositivo está fuera de línea. Asegúrese de que el complemento DSH Remote se esté ejecutando en su computadora.", secureConnect: "Conéctese de forma segura",
+    title: "Dispositivos", myDevices: "Mis dispositivos", lead: "Elige un dispositivo para continuar tu trabajo", detailHint: 'Mantén pulsado para ver detalles y volver a emparejar', footer: "Continúe su trabajo en cualquier momento.", favorites: "Favoritos", recent: "Visitado recientemente", openFavorite: (title: string, device: string) => `Abra “${title}” en ${device} desde Favoritos`, openRecent: (title: string, device: string) => `Abrir “${title}” visitado recientemente en ${device}`, removeFavorite: (title: string) => `Eliminar "${title}" de Favoritos`, emptyTitle: "No hay dispositivos disponibles", emptyBody: "Instale el complemento DSH Remote en su computadora e inicie sesión en la misma cuenta. El dispositivo aparecerá aquí.", options: "Administrar dispositivo", encrypted: "Conexión segura",
+    connectionInterrupted: "Conexión interrumpida", trustExplanation: "Después de la confirmación, este teléfono recuerda la identidad segura del dispositivo. Si esa identidad cambia, la conexión se detiene para proteger sus datos.", badgePaired: 'Emparejado', badgePending: 'Pendiente', badgeUnpaired: 'Sin emparejar', pairPendingExplanation: 'La clave de este ordenador ya está guardada. Confirma el código en el ordenador y continúa aquí.', pairExplanation: 'Este dispositivo aún no está emparejado con este teléfono. Genera un código en el ordenador, escanéalo aquí y confirma el mismo código en ambas pantallas.', repair: 'Volver a emparejar', pairNow: 'Escanear para emparejar', trust: "Confía y continúa", connectReady: "Conéctese para ver y continuar conversaciones en su computadora.", offlineHelp: "Este dispositivo está fuera de línea. Asegúrese de que el complemento DSH Remote se esté ejecutando en su computadora.", secureConnect: "Conéctese de forma segura",
     connectingTitle: "Conectar dispositivo", connecting: "Conectando", connectionReady: "Listo", retryConnection: "Conéctate de nuevo", cancelConnection: "Cancelar conexión", openInfo: "Ver información del dispositivo y de la conexión",
     connectionProbeLabels: {
       lan: "Sondeo de ruta directa local",

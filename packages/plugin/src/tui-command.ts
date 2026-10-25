@@ -112,7 +112,7 @@ export function installTuiRemoteCommand(
     const definition: CommandDefinitionLike = {
       name: 'remote',
       description: 'Manage Remote Host login and connection status',
-      input: { hint: '[status | login [provider|list] | logout]' },
+      input: { hint: '[status | login [provider|list] | pair [confirm|status|cancel] | logout]' },
       recordInput: false,
       handler: async ({ rawInput }) => {
         const args = rawInput.trim().split(/\s+/u).filter(Boolean)
@@ -163,6 +163,55 @@ export function installTuiRemoteCommand(
               text: `Local Remote Host credentials were cleared, but Server revocation failed (${errorCode(error)}).`,
             }
           }
+        }
+        if (command === 'pair') {
+          const target = resolveTarget()
+          if (target === undefined) return remoteNotReady()
+          const sub = args[1]
+          try {
+            if (sub === undefined) {
+              // The URI is rendered here and never sent to the Server.
+              const { uri, expiresAt } = target.runtime.beginPairing()
+              const qr = await renderTerminalQr(uri)
+              return {
+                kind: 'success',
+                text: [
+                  qr,
+                  '',
+                  'Scan this on the Controller (phone). It will show a confirmation code.',
+                  'Compare it and run here:',
+                  '  /remote pair confirm ABCD-EFGH-JKLM',
+                  '',
+                  `Expires at ${new Date(expiresAt).toLocaleTimeString()}`,
+                ].join('\n'),
+              }
+            }
+            if (sub === 'confirm') {
+              const code = args.slice(2).join('')
+              if (code === '') return { kind: 'error', text: 'Usage: /remote pair confirm <code shown on the Controller>' }
+              const result = await target.runtime.confirmPairing(code)
+              return {
+                kind: 'success',
+                text: `Paired ${result.peerDeviceId}. The Controller reconnects automatically.`,
+              }
+            }
+            if (sub === 'status') {
+              const pending = target.runtime.pendingPairing()
+              return {
+                kind: 'success',
+                text: pending === undefined
+                  ? 'No pairing is waiting for confirmation.'
+                  : `Waiting for the code from ${pending.peerDeviceId} (${pending.attemptsLeft} attempts left).`,
+              }
+            }
+            if (sub === 'cancel') {
+              target.runtime.cancelPairing()
+              return { kind: 'success', text: 'Pairing cancelled.' }
+            }
+          } catch (error) {
+            return { kind: 'error', text: errorCode(error) }
+          }
+          return { kind: 'error', text: remoteCommandUsage() }
         }
         if (command === 'config') {
           return { kind: 'error', text: 'Host configuration is not supported yet.' }
@@ -252,10 +301,22 @@ function remoteCommandChildren(canonicalPath: readonly string[], providers: read
         descriptions: { zh: '使用服务端提供的 OAuth 二维码授权当前 Host' },
       },
       {
+        name: 'pair',
+        description: 'Pair a Controller by scanning a local QR code',
+        descriptions: { zh: '用本地二维码配对一台 Controller（手机）' },
+      },
+      {
         name: 'logout',
         description: 'Revoke this Host and rotate its local identity',
         descriptions: { zh: '撤销当前 Host 并轮换本地身份' },
       },
+    ]
+  }
+  if (canonicalPath.length === 2 && canonicalPath[0] === 'remote' && canonicalPath[1] === 'pair') {
+    return [
+      { name: 'confirm', description: 'Confirm with the code shown on the Controller', descriptions: { zh: '输入 Controller 上显示的确认码' } },
+      { name: 'status', description: 'Show the pending pairing', descriptions: { zh: '查看等待确认的配对' } },
+      { name: 'cancel', description: 'Cancel the open pairing offer', descriptions: { zh: '取消当前配对' } },
     ]
   }
   if (canonicalPath.length === 2 && canonicalPath[0] === 'remote' && canonicalPath[1] === 'login') {
@@ -321,6 +382,7 @@ function remoteCommandUsage(): string {
     '  /remote',
     '  /remote status',
     '  /remote login [provider|list]',
+    '  /remote pair [confirm <code> | status | cancel]',
     '  /remote logout',
   ].join('\n')
 }

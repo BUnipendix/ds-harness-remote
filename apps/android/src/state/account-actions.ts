@@ -1,5 +1,4 @@
 import { normalizeServerUrl } from '../lib/server-url'
-import * as Haptics from 'expo-haptics'
 import { resolveAutoConnectDevice } from '../lib/auto-connect'
 import { friendlyError, isSessionAuthError } from '../lib/errors'
 import { applyLanguagePreference, strings as zhCN } from '../locales/i18n'
@@ -37,11 +36,11 @@ import {
   saveFavoriteWorkspaces,
   saveCompactHistory,
   saveLanguagePreference,
+  resetHostPairing,
   saveRecentWorkspaces,
   saveServerConfig,
   saveThemePreference,
   saveStatusBarVisible,
-  trustHost,
 } from '../services/storage'
 import type { ServerConfig, WorkspaceShortcut } from '../types'
 import type { AppState, QrLoginStart, QrProviderList, StoreAccess } from './store-state'
@@ -49,7 +48,7 @@ import { clearBrowseMemory } from '../services/browse-memory'
 import { initialData } from './store-state'
 
 type AccountActions = Pick<AppState,
-  'bootstrap' | 'requireReauth' | 'consumePendingAutoConnect' | 'configureServer' | 'selectServer' | 'startOAuth' | 'startGithubOAuth' | 'startGoogleOAuth' | 'completeOAuth' | 'listQrProviders' | 'listLoginProviders' | 'startQrLogin' | 'pollQrLogin' | 'completeQrLogin' | 'refreshDevices' | 'trustDevice' | 'renameDevice' | 'forgetDevice' | 'resetLocalData' | 'signOut'>
+  'bootstrap' | 'requireReauth' | 'consumePendingAutoConnect' | 'configureServer' | 'selectServer' | 'startOAuth' | 'startGithubOAuth' | 'startGoogleOAuth' | 'completeOAuth' | 'listQrProviders' | 'listLoginProviders' | 'startQrLogin' | 'pollQrLogin' | 'completeQrLogin' | 'refreshDevices' | 'resetPairing' | 'renameDevice' | 'forgetDevice' | 'resetLocalData' | 'signOut'>
 
 export function createAccountActions({ set, get }: StoreAccess): AccountActions {
   let accountGeneration = 0
@@ -392,22 +391,21 @@ export function createAccountActions({ set, get }: StoreAccess): AccountActions 
       }
     },
 
-    async trustDevice(device) {
-      const current = captureAccount()
-      if (accountChanges > 0 || device.identityKey.length === 0) return false
-      await exclusive(async () => { if (current()) await trustHost(device) })
-      if (!current()) return false
-      set(state => ({
-        devices: state.devices.map(item => item.deviceId === device.deviceId ? { ...item, trusted: true } : item),
-      }))
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
-      return true
-    },
-
     consumePendingAutoConnect() {
       const deviceId = get().pendingAutoConnectDeviceId
       if (deviceId !== undefined) set({ pendingAutoConnectDeviceId: undefined })
       return deviceId
+    },
+
+    async resetPairing(deviceId) {
+      // Local only: the Server membership stays, the out-of-band check restarts.
+      await resetHostPairing(deviceId)
+      set(state => ({
+        devices: state.devices.map(item => item.deviceId === deviceId
+          ? { ...item, verification: 'unverified' as const, confirmedAt: undefined }
+          : item),
+      }))
+      return true
     },
 
     async renameDevice(deviceId, name) {

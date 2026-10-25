@@ -4,10 +4,28 @@ import { initialProbeTransports } from '../lib/network-route'
 import { strings as zhCN } from '../locales/i18n'
 import { resolveAutomaticPreferredTransports } from '../services/network-route'
 import { serverSession } from '../services/server-session'
-import { saveLastConnectedDeviceId } from '../services/storage'
+import { confirmHost, saveLastConnectedDeviceId } from '../services/storage'
 import type { SessionAccess } from './session-runtime'
 import type { AppState } from './store-state'
 import { disconnected } from './store-state'
+
+/**
+ * A pairing tunnel finishes the Noise handshake but stays out of the Host's
+ * connection controller until the operator confirms the code on the Host
+ * screen. The pairing screen retries, so one attempt only has to cover the
+ * moment between a silent tunnel and a routed one.
+ */
+const HOST_DESCRIBE_TIMEOUT_MS = 15_000
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms)
+    promise.then(
+      value => { clearTimeout(timer); resolve(value) },
+      error => { clearTimeout(timer); reject(error) },
+    )
+  })
+}
 
 /** Connection actions use the store's single connection/session runtime. */
 export function createConnectionActions({ get, set, runtime }: SessionAccess): Pick<AppState,
@@ -124,7 +142,11 @@ export function createConnectionActions({ get, set, runtime }: SessionAccess): P
         set({ connectionStage: 'loading' })
         const proxy = runtime.connection.requireProxy()
         // Catalogs belong to the category the user opens, not connection setup.
-        const hostDescriptor = await proxy.hostDescribe()
+        const hostDescriptor = await withTimeout(
+          proxy.hostDescribe(),
+          HOST_DESCRIBE_TIMEOUT_MS,
+          zhCN.runtime.secureHandshakeTimedOut,
+        )
         const connectionNetworkDetails = await runtime.connection.getNetworkDetails().catch(() => undefined)
         if (generation !== runtime.connectionGeneration) return false
         set({
@@ -142,6 +164,8 @@ export function createConnectionActions({ get, set, runtime }: SessionAccess): P
           connection: { phase: 'connected', stats: runtime.connection.getStats() ?? { mode: 'Relay', connected: true } },
         })
         runtime.connectionStartedAt = Date.now()
+        // The Host routed business traffic, so the pin is confirmed, not just scanned.
+        await confirmHost(device.deviceId)
         await saveLastConnectedDeviceId(device.deviceId)
         return true
       } catch (error) {

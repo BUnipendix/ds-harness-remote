@@ -153,6 +153,7 @@ export function connectionErrorMessage(code: string, t: Translate): string {
   if (code === 'SERVER_CREDENTIALS_BUSY') return t('connectionCredentialsBusy')
   if (code === 'DEVICE_REVOKED') return t('connectionDeviceRevoked')
   if (code === 'DEVICE_OWNERSHIP_REQUIRED') return t('connectionOwnershipRequired')
+  if (code === 'PEER_UNVERIFIED') return t('connectionPeerUnverified')
   if (code === 'RATE_LIMITED') return t('connectionRateLimited')
   if (code === 'UNSUPPORTED_VERSION') return t('connectionVersionMismatch')
   if (code === 'INVALID_MESSAGE') return t('connectionInvalidResponse')

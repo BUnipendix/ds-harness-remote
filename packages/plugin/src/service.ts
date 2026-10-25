@@ -277,6 +277,33 @@ export class HostPluginRuntime {
     this.serverConnection.reconnect()
   }
 
+  /**
+   * Start a local pairing offer. The URI must be rendered on this device only;
+   * it must never travel through the Server.
+   */
+  beginPairing(options: { ttlMs?: number } = {}): { uri: string; expiresAt: number } {
+    return this.requireServerConnection().beginPairing(options)
+  }
+
+  /** A connection that finished Noise and is waiting for the operator's code. */
+  pendingPairing(): { peerDeviceId: string; code: string; attemptsLeft: number; expiresAt: number } | undefined {
+    return this.serverConnection?.pendingPairing()
+  }
+
+  cancelPairing(): void {
+    this.serverConnection?.cancelPairing()
+  }
+
+  async confirmPairing(code: string): Promise<{ status: 'pinned'; peerDeviceId: string }> {
+    return await this.requireServerConnection().confirmPairing(code)
+  }
+
+  private requireServerConnection(): HostServerConnection {
+    const connection = this.serverConnection
+    if (connection === undefined) throw new Error('Remote Host is not connected to a Server yet.')
+    return connection
+  }
+
   async hostOAuthProviders(): Promise<OAuthProviderInfo[]> {
     if (this.serverApi === undefined) {
       throw new ServerApiError('SERVER_NOT_CONFIGURED', 'Remote Host Server is unavailable.', false)

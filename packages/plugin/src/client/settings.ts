@@ -8,8 +8,10 @@ import {
   messageOf,
 } from './presentation.js'
 import type { ClientReact, PluginAssociation, PluginSettingsView, RemoteStatus } from './types.js'
+import { createPairingPanel } from './qr-panel.js'
 
 export function createRemotePluginOptions(React: ClientReact) {
+  const PairingPanel = createPairingPanel(React)
   function RemotePluginOptions(props: {
     control: <T>(endpoint: string, payload?: unknown) => Promise<T>
     statusFeed: StatusFeed<RemoteStatus>
@@ -266,6 +268,15 @@ export function createRemotePluginOptions(React: ClientReact) {
       setError(undefined)
     }
 
+    // Pairing is the only out-of-band identity step, so it is rendered by a
+    // single component and offers exactly one method: scan the QR here, type
+    // the code the Controller shows.
+    const pairingSetting = React.createElement(PairingPanel, {
+      control: props.control,
+      t,
+      disabled: busy,
+    })
+
     const developmentSetting = React.createElement('section', { className: 'dshRemoteDevelopmentSettings' },
       React.createElement('div', { className: 'dshRemoteAuthorizationSetting' },
         React.createElement('div', null, React.createElement('strong', null, t('terminalRemote')),
@@ -367,6 +378,7 @@ export function createRemotePluginOptions(React: ClientReact) {
                   onChange: (event: Event) => { setServerUrl((event.target as HTMLInputElement).value); setNotice(undefined) },
                 }),
                 React.createElement('p', null, t('serverUrlHint'))),
+              pairingSetting,
               developmentSetting,
               acpSetting,
               React.createElement('div', { className: 'dshRemoteAuthorizationSetting' },

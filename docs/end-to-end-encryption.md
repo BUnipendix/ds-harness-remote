@@ -103,6 +103,8 @@ Server 是连接协调者，不是不可见的网络参与者。为了完成授�
 
 因此，E2EE 隐藏业务内容，但不隐藏“哪些设备在何时通信”、连接持续时间、近似流量大小或网络候选等元数据。Relay frame 中的 ciphertext 禁止写入 Server 日志或数据库。
 
+> **威胁模型限定**：以上结论对"诚实但好奇"的 Server 成立。当前身份公钥由 Server 分发并在首次连接时固定（TOFU），尚无带外校验，因此恶意或被强制的 Server 可以在首次连接时替换公钥完成中间人；此外 Remote Web 与 Server 同源，其前端由 Server 下发。两处缺口的分析与改造路径见[端到端加密可行性与传输选型审查](design/e2ee-and-transport-review.md)。对这两条路径，不得宣称 Server 无法读取业务内容。
+
 ## 6. 消息完整性、顺序与重放保护
 
 Noise 为两个方向维护独立的认证 nonce/counter。接收端要求消息符合当前连接的下一状态：认证失败、重复密文、旧消息、乱序消息或连接不匹配都会 fail closed。
@@ -120,7 +122,8 @@ Noise 单条 transport message 有 65,535 bytes 上限。编码后的业务消�
 ## 7. 密钥生命周期
 
 - **设备 identity private key**：在设备本地产生和保存，不上传到 Server；Host 与 Client 角色相互隔离。
-- **远端 static public key**：从受保护的设备 descriptor 获取，并固定在本地 trust store。
+- **远端 static public key**：从受保护的设备 descriptor 获取，并固定在本地 trust store；来源标记为 `unverified`。
+- **带外配对**：二维码提供 Host 公钥，人工输入的 60 bit 确认码确认 Client 公钥，两者都写入 trust store 并标记为 `pairing`。Server 下发的 descriptor 永远不能覆盖或降级这类 pin。
 - **连接传输密钥**：由每次 Noise IK 握手产生，只属于绑定的 `connectionId` 与设备对。
 - **连接关闭**：销毁 Noise session、清理接收/发送状态和未完成分片；重新连接会重新握手。
 - **设备撤销**：撤销 device credential 与 membership，并关闭活动 Remote connection。再次授权被撤销角色时需要新的受信任身份流程。

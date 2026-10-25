@@ -64,6 +64,17 @@ export interface RemoteDevice {
   lastSeenAt?: number
   fingerprint?: string
   trusted: boolean
+  /**
+   * How the identity key reached this phone. `pairing` came from a scanned QR
+   * code, `unverified` came from a Server descriptor on first contact.
+   */
+  verification?: 'pairing' | 'unverified'
+  /**
+   * When the Host last routed traffic for this pin. A scanned code alone is not
+   * a finished pairing: the Host only lets the tunnel through after the
+   * operator confirms, so this stays unset until a connection actually works.
+   */
+  confirmedAt?: number
 }
 
 export interface DevicePresence {

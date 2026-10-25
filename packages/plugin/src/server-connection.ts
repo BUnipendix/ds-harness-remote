@@ -37,7 +37,15 @@ import {
 } from '@dsh-remote/webrtc'
 import type { ConnectionCloseDetail, ConnectionController } from './connection-controller.js'
 import type { ResolvedConfig } from './config.js'
-import type { HostIdentity, IdentityStore, TrustedPeer } from './identity-store.js'
+import { fingerprint, type HostIdentity, type IdentityStore, type TrustedPeer } from './identity-store.js'
+import {
+  PairingError,
+  PairingNonceRegistry,
+  createPairingOffer,
+  deriveSas,
+  normalizeSasInput,
+  sasMatches,
+} from './pairing.js'
 import type { SafeLogger } from './logging.js'
 import type { AuthorizedPeerDevice, HostServerApi } from './server-api.js'
 import { ServerApiError } from './server-api.js'
@@ -67,9 +75,34 @@ interface PendingTunnel {
   rtc?: RtcDataChannelTransport
   channel?: ServerNoiseChannel
   pendingHandshake?: SecureHandshakePayload
+  /** Authenticated but not yet identity-confirmed; carries no business traffic. */
+  verifying?: boolean
+  /** Pairing nonce this tunnel is being verified against. */
+  pairingNonce?: string
+}
+
+/**
+ * A pending connection waiting for the operator to type the confirmation code.
+ *
+ * The candidate carries the peer identity rather than only a tunnel id: the
+ * Server drops an idle tunnel well before a human has walked over to the Host
+ * screen, and the Controller retries. The code is derived from the pairing
+ * nonce and both static keys, so every retry of the same offer produces the
+ * same code, and the confirmation must still work after the tunnel is gone.
+ */
+interface PairingCandidate {
+  connectionId: string
+  peerDeviceId: string
+  peer: TrustedPeer
+  expectedSas: string
+  attempts: number
+  /** Mirrors the offer expiry so a waiting tunnel cannot outlive its code. */
+  expiresAt: number
 }
 
 const DEFAULT_WEBRTC_NEGOTIATE_TIMEOUT_MS = 12_000
+/** Failed confirmation attempts before the offer is burned. */
+const MAX_PAIRING_ATTEMPTS = 3
 
 export class HostServerConnection {
   private socket?: WebSocketLike
@@ -84,6 +117,8 @@ export class HostServerConnection {
   private resumeQueued = false
   private authRecoveryAttempted = false
   private rtcFactory?: RtcPeerConnectionFactory
+  private readonly pairingOffers = new PairingNonceRegistry()
+  private pairingCandidate?: PairingCandidate
   private negotiatedCapabilities: string[] = ['transport.relay']
   private controlFrameLimits: ControlFrameByteLimits = {}
   private webRtcNegotiateTimeoutMs = DEFAULT_WEBRTC_NEGOTIATE_TIMEOUT_MS
@@ -137,6 +172,130 @@ export class HostServerConnection {
   lastError(): string | undefined { return this.terminalError }
 
   lastActivity(): number | undefined { return this.lastActiveAt }
+
+  /**
+   * Open a local pairing offer. The returned URI is shown on this device only;
+   * it must never travel through the Server.
+   */
+  beginPairing(options: { ttlMs?: number } = {}): { uri: string; expiresAt: number } {
+    const { offer, uri } = createPairingOffer({
+      hostDeviceId: this.identity.deviceId,
+      hostDeviceName: this.identity.name,
+      hostPublicKey: this.identity.publicKey,
+      ...(options.ttlMs === undefined ? {} : { ttlMs: options.ttlMs }),
+    })
+    this.pairingOffers.register(offer)
+    this.pairingCandidate = undefined
+    this.logger.info('pairing offer opened', { expiresAt: offer.expiresAt })
+    return { uri, expiresAt: offer.expiresAt }
+  }
+
+  /** A connection that finished Noise but is waiting for the operator's code. */
+  /**
+   * The waiting pairing, including the code this Host derived from the key that
+   * actually arrived. The UI must either show this code for a human comparison
+   * (and keep the confirm action locked for a few seconds) or show an input box
+   * instead — never both, or copying replaces comparing.
+   */
+  pendingPairing(): {
+    peerDeviceId: string
+    code: string
+    attemptsLeft: number
+    expiresAt: number
+  } | undefined {
+    const candidate = this.pairingCandidate
+    if (candidate === undefined) return undefined
+    if (candidate.expiresAt <= Date.now()) return undefined
+    return {
+      peerDeviceId: candidate.peerDeviceId,
+      code: candidate.expectedSas,
+      attemptsLeft: MAX_PAIRING_ATTEMPTS - candidate.attempts,
+      expiresAt: candidate.expiresAt,
+    }
+  }
+
+  /** Drop a pairing that outlived its offer, so no half-open tunnel lingers. */
+  async expirePairing(now = Date.now()): Promise<boolean> {
+    const candidate = this.pairingCandidate
+    if (candidate === undefined || candidate.expiresAt > now) return false
+    this.pairingCandidate = undefined
+    const tunnel = this.tunnels.get(candidate.connectionId)
+    if (tunnel !== undefined) await this.closeVerifyingTunnel(tunnel)
+    return true
+  }
+
+  cancelPairing(): void {
+    this.pairingOffers.clear()
+    this.pairingCandidate = undefined
+  }
+
+  /**
+   * Confirm the peer that is currently waiting by typing the code shown on the
+   * other device. The comparison runs against the Noise static key that arrived
+   * on *this* tunnel, so a Server-injected connection cannot borrow the code.
+   */
+  async confirmPairing(code: string): Promise<{ status: 'pinned'; peerDeviceId: string }> {
+    const candidate = this.pairingCandidate
+    if (candidate === undefined) throw new PairingError('PAIRING_NONE', 'No pairing is waiting for confirmation.')
+    // The Server drops an idle tunnel long before a human reaches the Host
+    // screen, so the tunnel is optional here: the code comes from the pairing
+    // nonce and both static keys, not from the connection that carried them.
+    const tunnel = this.tunnels.get(candidate.connectionId)
+    if (candidate.expiresAt <= Date.now()) {
+      this.pairingCandidate = undefined
+      if (tunnel !== undefined) await this.closeVerifyingTunnel(tunnel)
+      throw new PairingError('PAIRING_EXPIRED', 'The pairing code expired; generate a new one on the Host.')
+    }
+    const typed = normalizeSasInput(code)
+    if (!sasMatches(candidate.expectedSas, typed)) {
+      candidate.attempts += 1
+      if (candidate.attempts >= MAX_PAIRING_ATTEMPTS) {
+        this.pairingCandidate = undefined
+        this.pairingOffers.consume(this.identity.deviceId)
+        if (tunnel !== undefined) await this.closeVerifyingTunnel(tunnel)
+        this.logger.warn('pairing abandoned after repeated mismatches', {
+          peerDeviceId: shortId(candidate.peerDeviceId),
+        })
+      }
+      throw new PairingError('SAS_MISMATCH', 'Confirmation code does not match the device that is connecting.')
+    }
+    if (tunnel !== undefined && tunnel.peer.publicKey !== candidate.peer.publicKey) {
+      this.pairingCandidate = undefined
+      throw new PairingError('SAS_MISMATCH', 'The waiting tunnel no longer matches the confirmed device.')
+    }
+    const pinned = await this.identities.pinPeer({ ...candidate.peer, verification: 'pairing' })
+    this.pairingOffers.consume(this.identity.deviceId)
+    this.pairingCandidate = undefined
+    if (tunnel !== undefined && tunnel.verifying === true && tunnel.channel !== undefined) {
+      // Hand the already-authenticated channel over instead of dropping it: the
+      // operator's confirmation is the last step of pairing, not a signal for
+      // the Controller to reconnect and start over.
+      tunnel.verifying = false
+      tunnel.peer = pinned
+      try {
+        await this.connections.accept(tunnel.channel)
+      } catch (error) {
+        await this.closeVerifyingTunnel(tunnel)
+        this.logger.warn('pairing tunnel hand-off failed', {
+          peerDeviceId: shortId(candidate.peerDeviceId),
+          reason: diagnosticReason(error),
+        })
+        throw new PairingError('PAIRING_NONE', 'The pairing tunnel could not be handed over; connect again.')
+      }
+    } else if (tunnel !== undefined) {
+      // No live channel left: the Controller retries and is now pinned.
+      await this.closeVerifyingTunnel(tunnel)
+    }
+    this.logger.info('peer identity pinned from pairing', { peerDeviceId: shortId(candidate.peerDeviceId) })
+    return { status: 'pinned', peerDeviceId: candidate.peerDeviceId }
+  }
+
+  private async closeVerifyingTunnel(tunnel: PendingTunnel): Promise<void> {
+    if (this.tunnels.get(tunnel.connectionId) === tunnel) this.tunnels.delete(tunnel.connectionId)
+    await tunnel.rtc?.close().catch(() => undefined)
+    if (tunnel.channel !== undefined) await tunnel.channel.close().catch(() => undefined)
+    else tunnel.noise.destroy()
+  }
 
   isReconnecting(): boolean { return !this.online && !this.stopped && this.running !== undefined }
 
@@ -406,18 +565,50 @@ export class HostServerConnection {
       })
       return
     }
-    const peer = existing !== undefined
-      && existing.membershipId === descriptor.membershipId
-      && existing.name === descriptor.name
-      && existing.platform === descriptor.platform
-      ? existing
-      : await this.identities.trustPeer({
+    // The descriptor came from the Server, so an unpaired peer key proves
+    // nothing about who is connecting. With verified peers required, the only
+    // way in is a live pairing offer: the tunnel may finish the Noise handshake
+    // so a confirmation code can be derived from the key that actually arrived,
+    // but it carries no business traffic until the operator confirms it.
+    const unverified = existing === undefined || existing.verification === 'unverified'
+    let pairingNonce: string | undefined
+    if (unverified && this.config.identity.requireVerifiedPeer) {
+      const nonce = this.pairingOffers.active(this.identity.deviceId)
+      if (nonce === undefined || this.pairingCandidate !== undefined) {
+        this.sendControl('connect.rejected', { connectionId: payload.connectionId })
+        this.logger.warn('connection rejected: unverified peer without an open pairing offer', {
+          peerDeviceId: shortId(payload.clientDeviceId),
+          verification: existing?.verification ?? 'unpaired',
+          pairingOpen: nonce !== undefined,
+        })
+        return
+      }
+      pairingNonce = nonce
+    }
+    const peer = unverified && pairingNonce !== undefined
+      // Never persist an unconfirmed key: keep it in memory for this tunnel only.
+      ? {
           deviceId: descriptor.deviceId,
           name: descriptor.name,
           platform: descriptor.platform,
           publicKey: descriptor.identityKey,
+          fingerprint: fingerprint(descriptor.identityKey),
+          trustedAt: 0,
           membershipId: descriptor.membershipId,
-        })
+          verification: 'unverified' as const,
+        }
+      : existing !== undefined
+        && existing.membershipId === descriptor.membershipId
+        && existing.name === descriptor.name
+        && existing.platform === descriptor.platform
+        ? existing
+        : await this.identities.trustPeer({
+            deviceId: descriptor.deviceId,
+            name: descriptor.name,
+            platform: descriptor.platform,
+            publicKey: descriptor.identityKey,
+            membershipId: descriptor.membershipId,
+          })
     const previous = this.tunnels.get(payload.connectionId)
     previous?.noise.destroy()
     const noise = new NoiseIkSession({
@@ -434,6 +625,7 @@ export class HostServerConnection {
       preferredTransports: payload.preferredTransports,
       noise,
       transport: 'negotiating',
+      ...(pairingNonce === undefined ? {} : { verifying: true, pairingNonce }),
     })
     this.sendControl('connect.accepted', { connectionId: payload.connectionId })
   }
@@ -489,6 +681,36 @@ export class HostServerConnection {
       if (this.tunnels.get(tunnel.connectionId) === tunnel) this.tunnels.delete(tunnel.connectionId)
     }, mode)
     tunnel.channel = channel
+    if (tunnel.verifying === true) {
+      // Identity not confirmed yet: keep the channel out of the connection
+      // controller so no RPC or event can reach the Harness, and expose only a
+      // confirmation code derived from the key that actually arrived.
+      const nonce = tunnel.pairingNonce
+      if (nonce === undefined) throw new ControlConnectionError('SECURE_CHANNEL_FAILED', 'Pairing tunnel lost its nonce.')
+      this.pairingCandidate = {
+        connectionId: tunnel.connectionId,
+        peerDeviceId: tunnel.peer.deviceId,
+        peer: tunnel.peer,
+        expectedSas: deriveSas({
+          hostPublicKey: this.identity.publicKey,
+          clientPublicKey: tunnel.peer.publicKey,
+          nonce,
+        }),
+        attempts: 0,
+        expiresAt: this.pairingOffers.expiryOf(this.identity.deviceId) ?? Date.now(),
+      }
+      this.sendControl('secure.handshake', {
+        connectionId: tunnel.connectionId,
+        targetDeviceId: tunnel.peer.deviceId,
+        step: 2,
+        data: toBase64Url(reply),
+      } satisfies SecureHandshakePayload)
+      this.logger.info('pairing candidate awaiting confirmation', {
+        connectionId: shortId(tunnel.connectionId),
+        peerDeviceId: shortId(tunnel.peer.deviceId),
+      })
+      return
+    }
     await this.connections.accept(channel)
     // Publish the responder handshake only after the channel is registered.
     // The Client starts its first RPC as soon as step 2 arrives; sending the
@@ -816,6 +1038,8 @@ export class HostServerConnection {
   ): Promise<void> {
     const tunnel = this.tunnels.get(connectionId)
     if (tunnel === undefined) return
+    // A pairing candidate outlives its tunnel: the Controller retries while the
+    // operator walks to the Host screen, and every retry derives the same code.
     this.tunnels.delete(connectionId)
     try {
       await tunnel.rtc?.close()

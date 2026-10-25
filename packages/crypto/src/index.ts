@@ -67,6 +67,22 @@ export function identityFingerprint(publicKey: string): string {
 }
 
 export {
+  DEFAULT_PAIRING_TTL_MS,
+  PAIRING_SCHEME,
+  PAIRING_SAS_BITS,
+  PAIRING_SAS_CHARS,
+  PAIRING_SAS_INFO,
+  PairingCodeError,
+  createPairingNonce,
+  createPairingOffer,
+  derivePairingSas,
+  normalizePairingCode,
+  pairingSasMatches,
+  parsePairingOffer,
+} from './pairing.js'
+export type { PairingOffer, PairingOfferInput, PairingSasInput } from './pairing.js'
+
+export {
   NOISE_IK_PROTOCOL,
   NoiseIkSession,
   NoiseSessionError,

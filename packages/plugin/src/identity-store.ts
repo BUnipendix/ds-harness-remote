@@ -13,6 +13,19 @@ const identitySchema = z.object({
   publicKey: z.string().min(1),
 }).strict()
 
+/**
+ * How a peer key became trusted.
+ *
+ * - `pairing` / `user`: the key reached the trust store through an out-of-band
+ *   channel (pairing payload or an explicit human confirmation), so the Server
+ *   never had a chance to substitute it.
+ * - `unverified`: the key came from the Server device descriptor on first
+ *   contact. Legacy records without this field load as `unverified`.
+ */
+export type PeerVerification = 'pairing' | 'user' | 'unverified'
+
+const peerVerificationSchema = z.enum(['pairing', 'user', 'unverified'])
+
 const trustedPeerSchema = z.object({
   deviceId: z.string().min(1),
   name: z.string().min(1).max(80),
@@ -21,6 +34,7 @@ const trustedPeerSchema = z.object({
   fingerprint: z.string().min(1),
   trustedAt: z.number().int().nonnegative(),
   membershipId: z.string().min(1).optional(),
+  verification: peerVerificationSchema.default('unverified'),
 }).strict()
 
 const trustedPeersSchema = z.object({
@@ -45,6 +59,12 @@ export interface TrustedPeer {
   fingerprint: string
   trustedAt: number
   membershipId?: string
+  verification: PeerVerification
+}
+
+/** Peer fields callers supply; `verification` defaults to `unverified`. */
+export type TrustPeerInput = Omit<TrustedPeer, 'fingerprint' | 'trustedAt' | 'verification'> & {
+  verification?: PeerVerification
 }
 
 export interface IdentityStoreOptions {
@@ -133,10 +153,47 @@ export class IdentityStore {
     return this.peers.get(deviceId)?.publicKey === publicKey
   }
 
-  async trustPeer(input: Omit<TrustedPeer, 'fingerprint' | 'trustedAt'>): Promise<TrustedPeer> {
+  /**
+   * Record a peer key that came from a Server device descriptor.
+   *
+   * Such a key only ever reaches `unverified`, and it can never downgrade or
+   * replace a key that was pinned out-of-band.
+   */
+  async trustPeer(input: TrustPeerInput): Promise<TrustedPeer> {
+    return await this.recordPeer(input, false)
+  }
+
+  /**
+   * Pin a peer key that arrived out-of-band (pairing payload or an explicit
+   * human confirmation). Only this path can mark a peer as verified, and only
+   * `replace` may change an already-pinned key.
+   */
+  async pinPeer(
+    input: TrustPeerInput & { verification: Exclude<PeerVerification, 'unverified'> },
+    options: { replace?: boolean } = {},
+  ): Promise<TrustedPeer> {
+    // Runtime guard for untyped callers; the signature already excludes it.
+    if ((input.verification as PeerVerification) === 'unverified') {
+      throw new IdentityInvalidError('pinPeer requires an out-of-band verification source')
+    }
+    return await this.recordPeer(input, options.replace === true)
+  }
+
+  /** True when the local pin did not come from the Server. */
+  isVerified(deviceId: string): boolean {
+    return this.peers.get(deviceId)?.verification !== undefined
+      && this.peers.get(deviceId)?.verification !== 'unverified'
+  }
+
+  private async recordPeer(input: TrustPeerInput, replace: boolean): Promise<TrustedPeer> {
     this.current()
+    const existing = this.peers.get(input.deviceId)
+    if (existing !== undefined && existing.publicKey !== input.publicKey && !replace) {
+      throw new IdentityInvalidError(`trusted peer ${input.deviceId} is already pinned to a different key`)
+    }
     const peer: TrustedPeer = {
       ...input,
+      verification: resolveVerification(existing, input, replace),
       fingerprint: fingerprint(input.publicKey),
       trustedAt: Date.now(),
     }
@@ -180,6 +237,18 @@ export function serverStorageDirectory(root: string, serverUrl: string, role: Re
   const origin = new URL(serverUrl).origin
   const scope = createHash('sha256').update(origin).digest('hex').slice(0, 24)
   return join(root, 'servers', scope, role)
+}
+
+/**
+ * A Server-sourced update may never weaken or clear an out-of-band pin.
+ * Unspecified verification therefore inherits the existing state when the key
+ * is unchanged, and defaults to `unverified` for a brand-new peer.
+ */
+function resolveVerification(existing: TrustedPeer | undefined, input: TrustPeerInput, replace: boolean): PeerVerification {
+  const requested = input.verification ?? 'unverified'
+  const samePeer = existing !== undefined && existing.publicKey === input.publicKey && !replace
+  if (samePeer && requested === 'unverified') return existing.verification
+  return requested
 }
 
 export function fingerprint(publicKey: string): string {

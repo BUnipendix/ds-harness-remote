@@ -1582,7 +1582,7 @@ Minimum version required to store current data is: ` + bestVersion + `.
   // node_modules/qrcode/lib/browser.js
   var require_browser = __commonJS({
     "node_modules/qrcode/lib/browser.js"(exports) {
-      var canPromise = require_can_promise(), QRCode2 = require_qrcode(), CanvasRenderer = require_canvas(), SvgRenderer = require_svg_tag();
+      var canPromise = require_can_promise(), QRCode3 = require_qrcode(), CanvasRenderer = require_canvas(), SvgRenderer = require_svg_tag();
       function renderCanvas(renderFunc, canvas, text, opts, cb) {
         let args = [].slice.call(arguments, 1), argsNum = args.length, isLastArgCb = typeof args[argsNum - 1] == "function";
         if (!isLastArgCb && !canPromise())
@@ -1596,7 +1596,7 @@ Minimum version required to store current data is: ` + bestVersion + `.
             throw new Error("Too few arguments provided");
           return argsNum === 1 ? (text = canvas, canvas = opts = void 0) : argsNum === 2 && !canvas.getContext && (opts = text, text = canvas, canvas = void 0), new Promise(function(resolve, reject) {
             try {
-              let data = QRCode2.create(text, opts);
+              let data = QRCode3.create(text, opts);
               resolve(renderFunc(data, canvas, opts));
             } catch (e) {
               reject(e);
@@ -1604,13 +1604,13 @@ Minimum version required to store current data is: ` + bestVersion + `.
           });
         }
         try {
-          let data = QRCode2.create(text, opts);
+          let data = QRCode3.create(text, opts);
           cb(null, renderFunc(data, canvas, opts));
         } catch (e) {
           cb(e);
         }
       }
-      exports.create = QRCode2.create;
+      exports.create = QRCode3.create;
       exports.toCanvas = renderCanvas.bind(null, CanvasRenderer.render);
       exports.toDataURL = renderCanvas.bind(null, CanvasRenderer.renderToDataURL);
       exports.toString = renderCanvas.bind(null, function(data, _, opts) {
@@ -1667,6 +1667,21 @@ Minimum version required to store current data is: ` + bestVersion + `.
     cursorRemoteHint: "Enable the Cursor `agent acp` backend for the Agent ACP gateway. Requires local `agent login`. Restart DSH after changing this setting.",
     cursorSaved: "Cursor ACP adapter setting saved. Restart DSH to apply it.",
     authorizeFromRemote: "Sign in from the Remote entry in the sidebar, then return here to manage this device.",
+    pairTitle: "Pair a Controller",
+    pairHint: "Scan the code on this screen with your phone. Both keys are exchanged out of band, so the Server cannot read the conversation.",
+    pairGenerate: "Show pairing code",
+    pairScanHint: "Scan this with the Controller, then compare the code it shows.",
+    pairExpires: "Expires at {time}",
+    pairCodePlaceholder: "Code shown on the Controller",
+    pairConfirm: "Confirm code",
+    pairWaiting: "Waiting for the code from {device} ({attempts} attempts left).",
+    pairPaired: "Paired {device}. The Controller reconnects automatically.",
+    pairCancel: "Cancel pairing",
+    pairWaitingPeer: "Waiting for the Controller to connect\u2026",
+    pairWaitCountdown: "Compare with {device}. Confirm unlocks in {seconds}s.",
+    pairConfirmMatch: "Codes match \u2014 confirm",
+    pairUseManual: "Type the code instead",
+    pairUseCompare: "Compare codes instead",
     authorizationMethod: "Authorization method",
     accountPassword: "Account password",
     registrationCode: "Device authorization code",
@@ -1712,6 +1727,7 @@ Minimum version required to store current data is: ` + bestVersion + `.
     connectionCredentialsBusy: "Credential refresh is locked. Stop other instances. After a crash, stop all instances before removing server-credentials.json.refresh-lock and authorizing again.",
     connectionDeviceRevoked: "This Host was revoked on the Server. Sign out and authorize it again.",
     connectionOwnershipRequired: "The Server no longer recognizes this Host as an owned device.",
+    connectionPeerUnverified: "This peer has not been paired on this device. Run pairing on the Host first.",
     connectionRateLimited: "The Server is receiving too many requests. Automatic retry will continue.",
     connectionVersionMismatch: "The Plugin and Server protocol versions are incompatible.",
     connectionInvalidResponse: "The Server returned an invalid control message.",
@@ -1938,6 +1954,21 @@ Minimum version required to store current data is: ` + bestVersion + `.
     cursorRemoteHint: "\u4E3A Agent ACP gateway \u542F\u7528 Cursor `agent acp` backend\u3002\u9700\u672C\u673A\u5B8C\u6210 `agent login`\u3002\u4FEE\u6539\u540E\u9700\u91CD\u542F DSH \u751F\u6548\u3002",
     cursorSaved: "Cursor ACP adapter \u8BBE\u7F6E\u5DF2\u4FDD\u5B58\uFF0C\u91CD\u542F DSH \u540E\u751F\u6548\u3002",
     authorizeFromRemote: "\u8BF7\u4ECE\u4FA7\u680F Remote \u5165\u53E3\u767B\u5F55\uFF0C\u767B\u5F55\u540E\u53EF\u5728\u8FD9\u91CC\u7BA1\u7406\u5F53\u524D\u8BBE\u5907\u3002",
+    pairTitle: "\u914D\u5BF9 Controller\uFF08\u624B\u673A\uFF09",
+    pairHint: "\u7528\u624B\u673A\u626B\u63CF\u672C\u673A\u5C4F\u5E55\u4E0A\u7684\u4E8C\u7EF4\u7801\u3002\u53CC\u65B9\u5BC6\u94A5\u7ECF\u7531\u5E26\u5916\u901A\u9053\u4EA4\u6362\uFF0C\u670D\u52A1\u5668\u65E0\u6CD5\u8BFB\u53D6\u4F1A\u8BDD\u5185\u5BB9\u3002",
+    pairGenerate: "\u751F\u6210\u914D\u5BF9\u7801",
+    pairScanHint: "\u7528\u624B\u673A\u626B\u7801\uFF0C\u7136\u540E\u6BD4\u5BF9\u624B\u673A\u4E0A\u663E\u793A\u7684\u786E\u8BA4\u7801\u3002",
+    pairExpires: "\u6709\u6548\u671F\u81F3 {time}",
+    pairCodePlaceholder: "\u624B\u673A\u4E0A\u663E\u793A\u7684\u786E\u8BA4\u7801",
+    pairConfirm: "\u786E\u8BA4",
+    pairWaiting: "\u7B49\u5F85 {device} \u7684\u786E\u8BA4\u7801\uFF08\u5269\u4F59 {attempts} \u6B21\uFF09\u3002",
+    pairPaired: "\u5DF2\u914D\u5BF9 {device}\uFF0C\u624B\u673A\u5C06\u81EA\u52A8\u91CD\u8FDE\u3002",
+    pairCancel: "\u53D6\u6D88\u914D\u5BF9",
+    pairWaitingPeer: "\u7B49\u5F85 Controller \u8FDE\u63A5\u2026",
+    pairWaitCountdown: "\u8BF7\u4E0E {device} \u5C4F\u5E55\u9010\u4F4D\u6838\u5BF9\uFF0C{seconds} \u79D2\u540E\u53EF\u786E\u8BA4\u3002",
+    pairConfirmMatch: "\u4E24\u7801\u4E00\u81F4\uFF0C\u786E\u8BA4\u914D\u5BF9",
+    pairUseManual: "\u6539\u4E3A\u624B\u52A8\u8F93\u5165",
+    pairUseCompare: "\u6539\u4E3A\u6BD4\u5BF9\u6A21\u5F0F",
     authorizationMethod: "\u6388\u6743\u65B9\u5F0F",
     accountPassword: "\u8D26\u53F7\u5BC6\u7801",
     registrationCode: "\u8BBE\u5907\u6388\u6743\u7801",
@@ -1982,6 +2013,7 @@ Minimum version required to store current data is: ` + bestVersion + `.
     connectionReplaced: "\u53E6\u4E00\u5B9E\u4F8B\u6B63\u5728\u4F7F\u7528\u6B64 Host \u8EAB\u4EFD\u3002\u8BF7\u505C\u6B62\u8BE5\u5B9E\u4F8B\uFF0C\u6216\u4F7F\u7528\u72EC\u7ACB\u7684 DSH_HOME \u540E\u91CD\u65B0\u8FDE\u63A5\u3002",
     connectionCredentialsBusy: "\u51ED\u636E\u5237\u65B0\u88AB\u9501\u5B9A\uFF0C\u8BF7\u505C\u6B62\u5176\u4ED6\u5B9E\u4F8B\u3002\u82E5\u6B64\u524D\u5F02\u5E38\u9000\u51FA\uFF0C\u8BF7\u505C\u6B62\u6240\u6709\u5B9E\u4F8B\u540E\u79FB\u9664 server-credentials.json.refresh-lock \u5E76\u91CD\u65B0\u6388\u6743\u3002",
     connectionDeviceRevoked: "\u6B64 Host \u5DF2\u5728 Server \u4E0A\u88AB\u64A4\u9500\uFF0C\u8BF7\u9000\u51FA\u6388\u6743\u540E\u91CD\u65B0\u8FDE\u63A5\u3002",
+    connectionPeerUnverified: "\u8BE5\u8BBE\u5907\u5C1A\u672A\u5728\u672C\u673A\u914D\u5BF9\u3002\u8BF7\u5148\u5728 Host \u4E0A\u6267\u884C\u914D\u5BF9\uFF0C\u518D\u8FDE\u63A5\u3002",
     connectionOwnershipRequired: "Server \u5DF2\u4E0D\u518D\u5C06\u6B64 Host \u8BC6\u522B\u4E3A\u5F53\u524D\u8D26\u53F7\u7684\u8BBE\u5907\u3002",
     connectionRateLimited: "Server \u8BF7\u6C42\u8FC7\u591A\uFF0C\u63D2\u4EF6\u5C06\u7EE7\u7EED\u81EA\u52A8\u91CD\u8BD5\u3002",
     connectionVersionMismatch: "Plugin \u4E0E Server \u7684\u534F\u8BAE\u7248\u672C\u4E0D\u517C\u5BB9\u3002",
@@ -2255,7 +2287,7 @@ Minimum version required to store current data is: ` + bestVersion + `.
     };
   }
   function connectionErrorMessage(code, t) {
-    return t(code === "ACCOUNT_AUTH_REQUIRED" || code === "AUTH_INVALID" || code === "TOKEN_EXPIRED" ? "connectionAuthorizationExpired" : code === "CONNECTION_REPLACED" ? "connectionReplaced" : code === "SERVER_CREDENTIALS_BUSY" ? "connectionCredentialsBusy" : code === "DEVICE_REVOKED" ? "connectionDeviceRevoked" : code === "DEVICE_OWNERSHIP_REQUIRED" ? "connectionOwnershipRequired" : code === "RATE_LIMITED" ? "connectionRateLimited" : code === "UNSUPPORTED_VERSION" ? "connectionVersionMismatch" : code === "INVALID_MESSAGE" ? "connectionInvalidResponse" : code === "CONNECTION_FAILED" || code === "SERVER_NOT_CONFIGURED" ? "connectionReachability" : "connectionUnexpected");
+    return t(code === "ACCOUNT_AUTH_REQUIRED" || code === "AUTH_INVALID" || code === "TOKEN_EXPIRED" ? "connectionAuthorizationExpired" : code === "CONNECTION_REPLACED" ? "connectionReplaced" : code === "SERVER_CREDENTIALS_BUSY" ? "connectionCredentialsBusy" : code === "DEVICE_REVOKED" ? "connectionDeviceRevoked" : code === "DEVICE_OWNERSHIP_REQUIRED" ? "connectionOwnershipRequired" : code === "PEER_UNVERIFIED" ? "connectionPeerUnverified" : code === "RATE_LIMITED" ? "connectionRateLimited" : code === "UNSUPPORTED_VERSION" ? "connectionVersionMismatch" : code === "INVALID_MESSAGE" ? "connectionInvalidResponse" : code === "CONNECTION_FAILED" || code === "SERVER_NOT_CONFIGURED" ? "connectionReachability" : "connectionUnexpected");
   }
   function connectionStatusLabel(status, t) {
     return status === void 0 ? t("checkingConnection") : status.online ? t("online") : status.reconnecting ? t(status.lastActiveAt === void 0 && status.error === void 0 ? "connecting" : "reconnecting") : t("offline");
@@ -2557,8 +2589,169 @@ Minimum version required to store current data is: ` + bestVersion + `.
     }
   }
 
+  // src/client/qr-panel.ts
+  var import_qrcode = __toESM(require_browser(), 1), COMPARE_DWELL_SECONDS = 8;
+  function createPairingPanel(React) {
+    return function(props) {
+      let { t } = props, [open, setOpen] = React.useState(!1), [image, setImage] = React.useState(void 0), [expiresAt, setExpiresAt] = React.useState(void 0), [code, setCode] = React.useState(""), [pending, setPending] = React.useState(void 0), [compare, setCompare] = React.useState(!0), [remaining, setRemaining] = React.useState(COMPARE_DWELL_SECONDS), [busy, setBusy] = React.useState(!1), [notice, setNotice] = React.useState(void 0), [error, setError] = React.useState(void 0), readPending = async () => {
+        let next = await props.control("host.pair.status");
+        setPending(next ?? void 0);
+      };
+      React.useEffect(() => {
+        if (!open) return;
+        let active = !0;
+        return props.control("host.pair.status").then((next) => {
+          active && setPending(next ?? void 0);
+        }).catch(() => {
+        }), () => {
+          active = !1;
+        };
+      }, [open]), React.useEffect(() => {
+        if (image === void 0) return;
+        let timer = setInterval(() => {
+          readPending().catch(() => {
+          });
+        }, 2e3);
+        return () => clearInterval(timer);
+      }, [image]), React.useEffect(() => {
+        if (pending === void 0 || !compare) return;
+        setRemaining(COMPARE_DWELL_SECONDS);
+        let timer = setInterval(() => {
+          setRemaining((value) => value <= 1 ? 0 : value - 1);
+        }, 1e3);
+        return () => clearInterval(timer);
+      }, [pending?.peerDeviceId, compare]);
+      let begin = async () => {
+        setBusy(!0), setError(void 0), setNotice(void 0), setCode(""), setPending(void 0);
+        try {
+          let session = await props.control("host.pair.begin");
+          setImage(await import_qrcode.default.toDataURL(session.uri, { width: 184, margin: 1, errorCorrectionLevel: "L" })), setExpiresAt(session.expiresAt), setNotice({ key: "pairScanHint" });
+        } catch (reason) {
+          setError(reason instanceof Error ? reason.message : String(reason));
+        } finally {
+          setBusy(!1);
+        }
+      }, confirm = async () => {
+        let submitted = compare ? pending?.code ?? "" : code.trim();
+        if (submitted !== "") {
+          setBusy(!0), setError(void 0), setNotice(void 0);
+          try {
+            let result = await props.control("host.pair.confirm", { code: submitted });
+            setImage(void 0), setCode(""), setExpiresAt(void 0), setPending(void 0), setNotice({ key: "pairPaired", params: { device: result.peerDeviceId } });
+          } catch (reason) {
+            setError(reason instanceof Error ? reason.message : String(reason)), await readPending().catch(() => {
+            });
+          } finally {
+            setBusy(!1);
+          }
+        }
+      }, cancel = async () => {
+        setBusy(!0);
+        try {
+          await props.control("host.pair.cancel");
+        } catch {
+        } finally {
+          setImage(void 0), setExpiresAt(void 0), setPending(void 0), setCode(""), setNotice(void 0), setBusy(!1);
+        }
+      }, sections = [
+        React.createElement("button", {
+          key: "begin",
+          type: "button",
+          disabled: props.disabled === !0 || busy,
+          onClick: () => void begin()
+        }, t("pairGenerate"))
+      ];
+      return image !== void 0 && (sections.push(React.createElement("img", {
+        key: "qr",
+        className: "dshRemotePairingQr",
+        src: image,
+        alt: t("pairTitle"),
+        width: 184,
+        height: 184
+      })), expiresAt !== void 0 && sections.push(React.createElement(
+        "small",
+        { key: "exp" },
+        t("pairExpires", { time: new Date(expiresAt).toLocaleTimeString() })
+      ))), pending !== void 0 && compare ? sections.push(React.createElement(
+        "div",
+        { key: "compare", className: "dshRemotePairingCompare" },
+        React.createElement("small", null, t("pairWaitCountdown", {
+          device: pending.peerDeviceId,
+          seconds: String(remaining)
+        })),
+        React.createElement("code", { className: "dshRemotePairingCode" }, pending.code),
+        React.createElement(
+          "div",
+          { className: "dshRemotePairingActions" },
+          React.createElement("button", {
+            type: "button",
+            disabled: busy || remaining > 0,
+            onClick: () => void confirm()
+          }, t("pairConfirmMatch")),
+          React.createElement("button", {
+            type: "button",
+            className: "dshRemoteLinkButton",
+            disabled: busy,
+            onClick: () => {
+              setCompare(!1), setRemaining(0);
+            }
+          }, t("pairUseManual"))
+        )
+      )) : pending !== void 0 && (sections.push(React.createElement(
+        "div",
+        { key: "manual", className: "dshRemotePairingConfirm" },
+        React.createElement("input", {
+          // Manual mode: never render the expected value, or the operator would
+          // copy it instead of reading the Controller screen.
+          value: code,
+          maxLength: 32,
+          placeholder: t("pairCodePlaceholder"),
+          "aria-label": t("pairCodePlaceholder"),
+          disabled: props.disabled === !0 || busy,
+          onChange: (event) => setCode(event.target.value.toUpperCase())
+        }),
+        React.createElement("button", {
+          type: "button",
+          disabled: props.disabled === !0 || busy || code.trim() === "",
+          onClick: () => void confirm()
+        }, t("pairConfirm"))
+      )), sections.push(React.createElement("button", {
+        key: "switch",
+        type: "button",
+        className: "dshRemoteLinkButton",
+        disabled: busy,
+        onClick: () => setCompare(!0)
+      }, t("pairUseCompare")))), pending === void 0 && image !== void 0 && sections.push(React.createElement("small", { key: "wait" }, t("pairWaitingPeer"))), image !== void 0 && sections.push(React.createElement("button", {
+        key: "cancel",
+        type: "button",
+        className: "dshRemoteDiscard",
+        disabled: busy,
+        onClick: () => void cancel()
+      }, t("pairCancel"))), error !== void 0 && sections.push(React.createElement("p", { key: "error", className: "dshRemoteError", role: "alert" }, error)), notice !== void 0 && sections.push(React.createElement(
+        "p",
+        { key: "notice", className: "dshRemoteNotice", role: "status" },
+        t(notice.key, notice.params)
+      )), React.createElement(
+        "details",
+        { className: "dshRemoteAuthorizationSetting dshRemotePairingSetting" },
+        React.createElement(
+          "summary",
+          { onClick: () => setOpen((value) => !value) },
+          React.createElement(
+            "div",
+            null,
+            React.createElement("strong", null, t("pairTitle")),
+            React.createElement("p", null, t("pairHint"))
+          )
+        ),
+        React.createElement("div", { className: "dshRemotePairingBody" }, ...sections)
+      );
+    };
+  }
+
   // src/client/settings.ts
   function createRemotePluginOptions(React) {
+    let PairingPanel = createPairingPanel(React);
     function RemotePluginOptions(props) {
       let { t } = props, [open, setOpen] = React.useState(props.view === "page"), [serverUrl, setServerUrl] = React.useState(""), [portsBusy, setPortsBusy] = React.useState(!1), [previewPorts, setPreviewPorts] = React.useState(""), role = "host", [registrationCode, setRegistrationCode] = React.useState(""), [associations, setAssociations] = React.useState({}), [loaded, setLoaded] = React.useState(!1), [writable, setWritable] = React.useState(!1), [busy, setBusy] = React.useState(!1), [terminalEnabled, setTerminalEnabled] = React.useState(!1), [terminalBusy, setTerminalBusy] = React.useState(!1), [acpBackends, setAcpBackends] = React.useState([]), [acpAvailability, setAcpAvailability] = React.useState({}), [acpChecking, setAcpChecking] = React.useState({}), [acpCheckResults, setAcpCheckResults] = React.useState({}), [addingAcp, setAddingAcp] = React.useState(!1), [acpName, setAcpName] = React.useState(""), [acpCommand, setAcpCommand] = React.useState(""), [acpArguments, setAcpArguments] = React.useState("acp"), [reconnectBusy, setReconnectBusy] = React.useState(!1), [hostStatus, setHostStatus] = React.useState(void 0), [hostName, setHostName] = React.useState(""), [hostDeviceId, setHostDeviceId] = React.useState(""), [notice, setNotice] = React.useState(void 0), [error, setError] = React.useState(void 0), [settingsView, setSettingsView] = React.useState(void 0), associationReadRun = React.useRef(0), persistedServerUrl = settingsView?.config.serverUrl ?? "https://dsh.r2049.cn", association = associations.client ?? associations.host, serverDirty = settingsView !== void 0 && serverUrl !== persistedServerUrl, draftDirty = serverDirty, applyAssociations = (view) => {
         setAssociations(view.associations ?? (view.association === void 0 ? {} : { host: view.association }));
@@ -2702,7 +2895,11 @@ Minimum version required to store current data is: ` + bestVersion + `.
         }
       }, discard = () => {
         settingsView !== void 0 && applyView(settingsView), setRegistrationCode(""), setNotice(void 0), setError(void 0);
-      }, developmentSetting = React.createElement(
+      }, pairingSetting = React.createElement(PairingPanel, {
+        control: props.control,
+        t,
+        disabled: busy
+      }), developmentSetting = React.createElement(
         "section",
         { className: "dshRemoteDevelopmentSettings" },
         React.createElement(
@@ -2887,6 +3084,7 @@ Minimum version required to store current data is: ` + bestVersion + `.
               }),
               React.createElement("p", null, t("serverUrlHint"))
             ),
+            pairingSetting,
             developmentSetting,
             acpSetting,
             React.createElement(
@@ -3066,7 +3264,7 @@ Minimum version required to store current data is: ` + bestVersion + `.
       ".dshRemoteWorkspaceLists{overflow:visible}",
       ".dshRemoteDirectoryList{min-height:72px;display:flex;flex-direction:column;border-top:1px solid var(--dsw-alias-border-l2)}.dshRemoteDirectoryList>button{min-height:52px;display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:10px;text-align:left;border:0;border-bottom:1px solid var(--dsw-alias-border-l2);background:transparent;padding:8px 4px;cursor:pointer}.dshRemoteDirectoryList>button:hover,.dshRemoteDirectoryList>button.isSelected{background:var(--dsw-alias-interactive-bg-hover)}.dshRemoteDirectoryList>button.isSelected{color:var(--dsw-alias-label-primary)}.dshRemoteDirectoryList>button>span:first-child,.dshRemoteDirectoryList>button>.dshRemoteWorkspaceIcon{grid-row:1/3}.dshRemoteWorkspaceIcon{box-sizing:border-box;width:22px;height:22px;align-self:center;object-fit:contain}.dshRemoteWorkspaceIcon.isGpt{border-radius:6px}.dshRemoteDirectoryList>button>span:not(:first-child),.dshRemoteDirectoryList>button>small{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dshRemoteDirectoryList>button>small{grid-column:2;color:var(--dsw-alias-label-secondary)}.dshRemoteDirectoryList>p,.dshRemoteHint{margin:12px 0;color:var(--dsw-alias-label-secondary);font-size:13px}",
       ".dshRemoteAddWorkspace{box-sizing:border-box;width:40px;height:40px;display:inline-grid;place-items:center;flex:0 0 auto;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);padding:0;cursor:pointer}.dshRemoteAddWorkspace:hover:not(:disabled){color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}.dshRemoteAddWorkspace:disabled{opacity:.5;cursor:default}.dshRemoteAddWorkspaceIcon{width:20px;height:20px}.dshRemoteCodexWorkspaceGroup{margin-top:16px}.dshRemoteWorkspaceSourceHeading{min-height:44px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 4px 7px}.dshRemoteWorkspaceSourceText{min-width:0;display:flex;flex-direction:column;gap:2px}.dshRemoteWorkspaceSourceText>strong{font-size:13px}.dshRemoteWorkspaceSourceText>small{color:var(--dsw-alias-label-secondary);font-size:11px}.dshRemoteCodexWorkspaceList{min-height:0}.dshRemoteDirectoryList>.dshRemoteWorkspaceMore,.dshRemoteCodexWorkspaceGroup>.dshRemoteWorkspaceMore{box-sizing:border-box;width:100%;min-height:48px;display:flex;align-items:center;justify-content:center;border:0;border-bottom:1px solid var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-secondary);padding:8px 4px;text-align:center;font-size:16px;cursor:pointer}.dshRemoteWorkspaceMore>span{display:block;line-height:1;transform:translateY(-2px)}.dshRemoteWorkspaceMore:hover:not(:disabled){color:var(--dsw-alias-label-primary);background:transparent}.dshRemoteWorkspaceMore:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}.dshRemoteWorkspaceMore:disabled{opacity:.5;cursor:default}",
-      ".dshRemotePreviewAction,.dshRemotePreviewForm{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}.dshRemotePreviewForm input{width:90px;color:inherit;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);padding:6px}.dshRemotePreviewForm [role=alert]{max-width:360px;white-space:normal}.dshRemoteDevelopmentSettings{width:100%;margin:16px 0}.dshRemoteDevelopmentSettings .dshRemotePathField{display:flex;flex-direction:column;gap:6px;margin:8px 0}.dshRemoteDevelopmentSettings .dshRemotePathField>label{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500;line-height:1.5}.dshRemoteDevelopmentSettings .dshRemotePortsRow{display:flex;gap:8px;align-items:stretch;width:100%}.dshRemoteDevelopmentSettings .dshRemotePortsRow>input{box-sizing:border-box;width:100%;flex:1;min-width:0;height:34px;border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;background:var(--dsw-alias-bg-layer-3);color:inherit;padding:0 12px;font:inherit;font-size:13px;line-height:1.5}.dshRemoteDevelopmentSettings button{min-height:34px;color:inherit;background:var(--dsw-alias-bg-layer-1);border:.5px solid var(--dsw-alias-border-l2);border-radius:8px;padding:5px 14px;white-space:nowrap;font-size:13px;line-height:1.5}.dshRemoteAcpAddForm>label{display:flex;min-width:0;flex-direction:column;gap:5px;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500;line-height:1.5}.dshRemoteAcpAddForm>label>input{box-sizing:border-box;width:100%;height:34px;border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);padding:0 12px;font:inherit;font-size:13px;line-height:1.5}",
+      ".dshRemotePreviewAction,.dshRemotePreviewForm{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}.dshRemotePreviewForm input{width:90px;color:inherit;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);padding:6px}.dshRemotePreviewForm [role=alert]{max-width:360px;white-space:normal}.dshRemoteDevelopmentSettings{width:100%;margin:16px 0}.dshRemoteDevelopmentSettings .dshRemotePathField{display:flex;flex-direction:column;gap:6px;margin:8px 0}.dshRemoteDevelopmentSettings .dshRemotePathField>label{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500;line-height:1.5}.dshRemoteDevelopmentSettings .dshRemotePortsRow{display:flex;gap:8px;align-items:stretch;width:100%}.dshRemoteDevelopmentSettings .dshRemotePortsRow>input{box-sizing:border-box;width:100%;flex:1;min-width:0;height:34px;border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;background:var(--dsw-alias-bg-layer-3);color:inherit;padding:0 12px;font:inherit;font-size:13px;line-height:1.5}.dshRemoteDevelopmentSettings button{min-height:34px;color:inherit;background:var(--dsw-alias-bg-layer-1);border:.5px solid var(--dsw-alias-border-l2);border-radius:8px;padding:5px 14px;white-space:nowrap;font-size:13px;line-height:1.5}.dshRemoteAcpAddForm>label{display:flex;min-width:0;flex-direction:column;gap:5px;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500;line-height:1.5}.dshRemoteAcpAddForm>label>input{box-sizing:border-box;width:100%;height:34px;border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);padding:0 12px;font:inherit;font-size:13px;line-height:1.5}.dshRemotePairingSetting{display:block!important;width:100%}.dshRemotePairingSetting>summary{cursor:pointer;list-style:none}.dshRemotePairingSetting>summary::-webkit-details-marker{display:none}.dshRemotePairingBody{display:flex;flex-direction:column;gap:8px;margin-top:8px}.dshRemotePairingQr{align-self:center;border-radius:8px;background:#fff;padding:6px}.dshRemotePairingConfirm{display:flex;gap:8px;align-items:stretch}.dshRemotePairingConfirm>input{flex:1;min-width:0;height:34px;border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;background:var(--dsw-alias-bg-layer-3);color:inherit;padding:0 12px;font:inherit;font-size:13px}.dshRemotePairingCompare{display:flex;flex-direction:column;gap:8px;align-items:flex-start}.dshRemotePairingCode{display:block;width:100%;text-align:center;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:20px;letter-spacing:2px;padding:10px 0;border-radius:8px;background:var(--dsw-alias-bg-layer-3);border:.5px solid var(--dsw-alias-border-l4)}.dshRemotePairingActions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.dshRemoteLinkButton{background:transparent!important;border:0!important;color:var(--dsw-alias-brand-primary)!important;padding:4px 0!important;min-height:0!important;font-size:12px;text-decoration:underline;text-underline-offset:3px}.dshRemotePairingBody>button{align-self:flex-start;min-height:34px;color:inherit;background:var(--dsw-alias-bg-layer-1);border:.5px solid var(--dsw-alias-border-l2);border-radius:8px;padding:5px 14px;font-size:13px}",
       ".dshRemoteFolderBrowser{margin-top:14px}.dshRemoteFolderBrowser>p,.dshRemoteFolderList>p{margin:12px 0;color:var(--dsw-alias-label-secondary);font-size:13px}.dshRemoteFolderList{max-height:260px;overflow:auto;border-block:1px solid var(--dsw-alias-border-l2)}.dshRemoteFolderList>button{width:100%;min-height:42px;display:flex;align-items:center;gap:9px;border:0;border-bottom:1px solid var(--dsw-alias-border-l2);background:transparent;padding:7px 6px;text-align:left;cursor:pointer}.dshRemoteFolderList>button:hover{background:var(--dsw-alias-interactive-bg-hover)}.dshRemoteFolderBrowser>small{display:block;margin-top:8px;color:var(--dsw-alias-state-warn-label)}",
       ".dshRemotePathField{display:flex;flex-direction:column;gap:6px;margin-top:20px}.dshRemotePathField>span{font-size:13px;font-weight:600}.dshRemotePathField>input{min-height:40px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-3);color:inherit;padding:0 12px;font:inherit}.dshRemotePathField>small{color:var(--dsw-alias-label-secondary)}",
       ".dshRemoteOpenBar{position:sticky;bottom:-96px;display:flex;align-items:center;justify-content:space-between;gap:20px;margin-top:20px;padding:14px 0;background:var(--dsw-alias-bg-layer-1);border-top:1px solid var(--dsw-alias-border-l2)}.dshRemoteOpenBar>div{min-width:0;display:flex;flex-direction:column;gap:3px}.dshRemoteOpenBar span{color:var(--dsw-alias-label-secondary);font-size:12px}.dshRemoteOpenBar strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.dshRemoteOpenBar>button,.dshRemoteEnable>button{min-height:40px;flex:0 0 auto;border:0;border-radius:8px;background:var(--dsw-alias-label-primary);color:var(--dsw-alias-bg-layer-1);padding:8px 16px;cursor:pointer}.dshRemoteOpenBar>button:disabled,.dshRemoteEnable>button:disabled{opacity:.5;cursor:default}",
@@ -3126,7 +3324,7 @@ Minimum version required to store current data is: ` + bestVersion + `.
   }
 
   // src/client/workspaces.ts
-  var import_qrcode = __toESM(require_browser(), 1);
+  var import_qrcode2 = __toESM(require_browser(), 1);
 
   // src/client/icons.ts
   var deepSeekWorkspaceIcon = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAMAAACdt4HsAAAACVBMVEUAAADy8vXx8fUsA3vyAAAAAXRSTlMAQObYZgAAAOxJREFUWMPtlsEOwyAMQxP+/6OnTZMGxHGcot3wDYgfhkJbs6urprzveGtu9d1NgEdto8w93GuA7zPS2RFg7ynsCOAokbtAmLr2YaeKgJ6fxpT8jCAC0qSqPyNoO5DXdvyouj4ClFAdYaDxK09uiBDCIYBf6CxLesnR0uF2pG+JmhCqrUb0AOvjjoQaYDTCEAAgMg5grhAeAQIB+/M15IcKlnUIp4CkTCd0AKb4zVsRSJVGYEVzT0agK107IMGMEurvromEpaX4wzk/IKw378kq4LafED6Oowxfk7AP2q8W16EdM3p29Eyvrv6vF0WIBfBziKyCAAAAAElFTkSuQmCC", gptWorkspaceIcon = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAMAAACdt4HsAAAAclBMVEX////v7+++wMf////s7O3k5OTExcrX2Ny6vMTv8PPW19yXmqRqboJmaHd3eoaqrLPs7fGMjpfb3eKlpq1eYXOxs7pWWWd+gY5HSVdRVGVub3k+QU74+Pg4OkcvMT1ISlUoKjUiIy4fICueoKkaGyUSFB21Bp+qAAAAAXRSTlMAQObYZgAABChJREFUWMPtl916qjoQhlsdEwIECEgMYCBxx/u/xT1DrFUL1LO1DtY8LSLJvPnmB4gfH//sr7TPDfvdebf/xXZbkE/4zZ0MVhGHd9zJDsv+7F3//Z69tT5wljAu3tXw+TIlzXKJlhflYmJ+5uF5WpWhb54X+C/zZCmT2wJA4dJZwus0UYjIGqWyMhVbEp4yKNRRqlv0opW5PJLJ4rFJXvP4JKDRMqturBZjkMVJFYjR6iHQDQDI4+k2k51wZbWrqwp4mR/1CVYATyko9TFGxBUqL5IvMbXSWt0T8bkGgFLqgqZBI/Uxbx5UAxLaNcCNLBpttM7wbCc1pmJOpWAsDtey68UaQMyrFgb9uxLPjqg3+nGluyKN0XUdWw0BJ0NvTFFqgzpr9J+Dh4w0Ga1qkqBNswagxdRgFPAbgHRQG5jumGWyMxrTIaRRa4AzFs0YrNMXgI4MJWnsKYFhGNMnIh/mBOPsV8CZBFjN9w8ArowxnZzDr5IcvxTaKpxJCVsoI3SWysz1UM4AqQdzlCgho1IKrK+x1mKFzisANtgEU8E7GwHDgOqxe4w9tnM166wbaA2xBMBLrTWcAGYGdCiYVUJUrMCF+7l6gklrW1RwPi8ByjuActANqhKzVWoYrFGcCFzbDgNaBrTWpncFQMcI2DfWoAiDqRCiHcYM/ZdCEKkZqfR8spj4F0CiJjv2gHL6URNoCQDaYacL6O1oFDO2eQDUFP7AKdCRdC4CRDZaNifbjA41l/uYb/SZMAFNTBGzY7sG4J2jTsJgToOzIzXF3HZqBpSOAGduXbkGEKV1OqVGqRJpRxtvwbSw5IqAiUJItwBCOT9R32FCGo3nCkAN3t0UTBRC6zDONcBeOee9pr4T+ASbnDOdc5OmtREwEEB5w8Wqgt4bOV5c7Lt9iiK8zdP/IsBbutUGX4gNwEVCqd3FUt/xYnRWt7BvPBYQjwjAGXa3ASguHVAZ/WXKlA3eZDX1wRegFsr7E2wAlB9xFbx/7MV70kFT8aqNgLL3F8nFBmA3hrn/IJHjKJOK2oj1WI4Z4FzwN/81AOhgYD6v2xbIvaZIurLC9AfvB1WLTYAoXejF1xeBL5cpBIyEbmxkZymIXwDQh1BAfOrhI1lfwtgz8tozF5T4ttf3+32AyxC6klwAgw/YVTHpoK82xYt3wLP/Bw4AAI4D7/01TLKXBj9NEz2wEuGiKpoy68S/FwCLMQAZ3gXhihaCa25vQo6RyToOz9PE6wYjJgGi1YnqZX8qMIK+TDlnargGzSv4NvFjlwXf/nfLLMrAB4O/Xl3BH0d+RIASFgDA8IYMIXgr2+cBsbDdPSwAAHjSZFmb3txETCKIxc0uWwI8rxsLJcTiVndNwyMgKljbbNN2/zcEAja2+4RgIDYN2Bu/WtAOaEodnu2dnzz/7I/Y/w/LaEcX/MdfAAAAAElFTkSuQmCC";
@@ -3174,7 +3372,7 @@ Minimum version required to store current data is: ` + bestVersion + `.
         let run = ++qrFlowRun.current;
         setBusy(!0), setError(void 0), setQrExpired(!1);
         try {
-          let session = await props.control("client.account.qr.start", { provider }), image = await import_qrcode.default.toDataURL(session.scanUrl, {
+          let session = await props.control("client.account.qr.start", { provider }), image = await import_qrcode2.default.toDataURL(session.scanUrl, {
             width: 184,
             margin: 1,
             errorCorrectionLevel: "L"

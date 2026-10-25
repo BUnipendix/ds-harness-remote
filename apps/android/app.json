@@ -20,7 +20,8 @@
         "android.permission.REQUEST_INSTALL_PACKAGES",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
-        "android.permission.INTERNET"
+        "android.permission.INTERNET",
+        "android.permission.CAMERA"
       ],
       "blockedPermissions": [
         "android.permission.SYSTEM_ALERT_WINDOW"
@@ -72,6 +73,14 @@
               "fr-FR"
             ]
           }
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "允许 DS Harness Remote 扫描配对二维码",
+          "barcodeScannerEnabled": true,
+          "recordAudioAndroid": false
         }
       ]
     ]
