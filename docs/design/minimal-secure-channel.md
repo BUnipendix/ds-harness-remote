@@ -355,13 +355,17 @@ CPU：brotli q4 处理 50 KB 约 5.7 ms；zstd L1 约 1.4 ms。也就是说 **50
 
 ### 12.4 编解码器选型
 
-| 方案 | 优点 | 代价 |
-| --- | --- | --- |
-| `node:zlib` brotli | 比率最好、Node 内置 | Android/browser 无内置，需另找实现 |
-| `node:zlib` zstd | 快 | Node 22 不一定有（本机 26 才有），跨端同样缺 |
-| **`fflate`（deflate，纯 JS）** | 全平台同一份代码，约 8 KB | 比率比 brotli 低约 10–15% |
+| 方案 | 优点 | 代价 | 实现风险 |
+| --- | --- | --- | --- |
+| `node:zlib` brotli | 比率最好、Node 内置 | Android/browser 无内置，需另找实现 | native 解码器，构造输入就能打崩甚至打穿进程（[CVE-2025-64508](https://github.com/advisories/GHSA-fc2v-vcwj-269v) 即「构造 Brotli 输入触发未认证远程 DoS」） |
+| `node:zlib` zstd | 快 | Node 22 不一定有（本机 26 才有），跨端同样缺 | 同上，native 解码器 |
+| **`fflate`（deflate，纯 JS）** | 全平台同一份代码，约 8 KB | 比率比 brotli 低约 10–15% | 纯 JS，越界只会抛异常，由 4 MiB 输出上限和 `try/catch` 兜住 |
 
-**推荐先用 `fflate` deflate**：一套代码跑通 Desktop / Android / VS Code，符合"功能少"的原则。等实测证明压缩率不足，再在通道内协商把 brotli 作为可选升级。
+**推荐先用 `fflate` deflate**：一套代码跑通 Desktop / Android / VS Code，符合"功能少"的原则。
+
+选它不只为跨端一致。**解压器本身就是暴露面**：对端设备一旦被控，它发来的字节会直接喂进解压器，而这条连接的另一头是 Host 主进程。native 解码器出错通常是进程崩溃、极端情况下是内存破坏；纯 JS 实现最坏的结果是抛一个异常，落回"不压缩"即可（§12.5），安全属性不变。
+
+因此即使将来实测发现 deflate 压缩率不够，可选升级也**只能是"通道内协商、默认关闭"**，并同样受 4 MiB 输出上限与膨胀比限制；不会因为"brotli 压得更好"就把它设成默认。
 
 ### 12.5 与不变量的关系
 
