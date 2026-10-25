@@ -27,13 +27,19 @@
   <a href="https://dshfind.com/zh/plugins/liguobao/ds-harness-remote?ref=badge"><img src="https://dshfind.com/api/badge/liguobao/ds-harness-remote?metric=downloads&amp;lang=zh" alt="dshfind downloads" width="137" height="20" align="absmiddle"></a>
 </p>
 
-> **Hardened fork of [liguobao/ds-harness-remote](https://github.com/liguobao/ds-harness-remote).**
-> End-to-end encryption protects the payload, but the relay service is still the only
-> place a Client can learn a Host's public key, so a first connection could be diverted
-> to a key the service controls. This fork closes that: the Host verifies the Controller
-> out of band before it accepts a single business frame, refuses any peer whose key was
-> only ever learned from the service, and never lets a server descriptor replace a pinned
-> identity.
+<p align="center">
+  <strong>This fork hardens the transport of the upstream project.</strong><br>
+  Rows marked <strong>🆕</strong> do not exist in
+  <a href="https://github.com/liguobao/ds-harness-remote">liguobao/ds-harness-remote</a>.
+</p>
+
+| Topic | [Upstream](https://github.com/liguobao/ds-harness-remote) | This fork 🆕 |
+| --- | --- | --- |
+| Source of the first Host key | the relay service alone | the relay service, accepted only after an out-of-band check |
+| Unpaired controller | connects | refused — `identity.requireVerifiedPeer` defaults to `true` |
+| Pairing | — | QR code on the Host, 12-character code compared on both screens |
+| Server drops the idle tunnel | — | the confirmation code survives, the Controller retries until it expires |
+| Re-pairing a device | — | "Pair again" in the device details, no account rebinding needed |
 
 Remote mode supports the official plugin page for listing, configuration, and enabling/disabling plugins (requires an updated Host Remote plugin). Remote itself remains locally managed on the Host; remote installation and removal are not exposed.
 
@@ -242,7 +248,7 @@ network metadata, but it cannot read session messages, prompts, tool output, wor
 remote file contents. See [End-to-end encryption](docs/end-to-end-encryption.md) for the handshake,
 key lifecycle, visible metadata, replay protection, and security limits.
 
-### Device pairing (required by default)
+### Device pairing (required by default) 🆕
 
 The service is the only source of peer public keys, so on its own it could substitute a key during
 the first connection and sit in the middle. Pairing removes that with two out-of-band channels:

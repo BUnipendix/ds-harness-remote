@@ -27,11 +27,19 @@
   <a href="https://dshfind.com/zh/plugins/liguobao/ds-harness-remote?ref=badge"><img src="https://dshfind.com/api/badge/liguobao/ds-harness-remote?metric=downloads&amp;lang=zh" alt="dshfind ダウンロード数" width="137" height="20" align="absmiddle"></a>
 </p>
 
-> **[liguobao/ds-harness-remote](https://github.com/liguobao/ds-harness-remote) の通信暗号化を強化した版です。**
-> エンドツーエンド暗号化が守るのは本文だけで、クライアントが最初に Host の公開鍵を知る手段は
-> リレーサービスしかありません。つまり初回接続だけは、サービスが自分の鍵にすり替える余地が残ります。
-> このリポジトリはそこを塞ぎます。Host は業務フレームを 1 つも通す前にコントローラーを帯外で確認し、
-> サービス経由でしか知らない鍵の相手を拒否し、固定済みの identity をサーバーの記述子で上書きさせません。
+<p align="center">
+  <strong>本リポジトリは上流の通信暗号化を強化した版です。</strong><br>
+  <strong>🆕</strong> の付いた行は
+  <a href="https://github.com/liguobao/ds-harness-remote">liguobao/ds-harness-remote</a> には存在しません。
+</p>
+
+| 項目 | [上流](https://github.com/liguobao/ds-harness-remote) | 本リポジトリ 🆕 |
+| --- | --- | --- |
+| 初回接続時の Host 公開鍵の入手元 | リレーサービスのみ | リレーサービス経由だが、帯域外での照合通過が条件 |
+| 未ペアリングのコントローラー | 接続できる | 拒否——`identity.requireVerifiedPeer` がデフォルトで有効 |
+| ペアリング方法 | — | Host が QR コードを表示し、両画面で 12 桁の確認コードを照合 |
+| サーバーがアイドル接続を切った場合 | — | 確認コードは失効せず、期限まで自動再試行 |
+| 再ペアリング | — | デバイス詳細の「再ペアリング」。アカウント再紐付けは不要 |
 
 Remote モードでは、公式プラグイン画面で一覧の表示、設定、有効化・無効化ができます（Host 側の Remote プラグインを更新する必要があります）。Remote 自体の管理は引き続き Host 上でのみ行います。リモートからのインストール・削除には対応していません。
 

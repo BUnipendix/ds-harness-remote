@@ -27,11 +27,19 @@
   <a href="https://dshfind.com/zh/plugins/liguobao/ds-harness-remote?ref=badge"><img src="https://dshfind.com/api/badge/liguobao/ds-harness-remote?metric=downloads&amp;lang=zh" alt="dshfind 下载量" width="137" height="20" align="absmiddle"></a>
 </p>
 
-> **本项目是 [liguobao/ds-harness-remote](https://github.com/liguobao/ds-harness-remote) 的通讯加密加强版。**
-> 端到端加密保护的是正文，但 Client 第一次拿到 Host 公钥时，唯一来源仍然是服务器，
-> 首次连接就可能被引到服务端自己持有的 key 上。本仓库堵掉这个口子：Host 先带外核对手机身份，
-> 确认之前一个业务帧都不放行；只从服务端学到过 key 的 peer 一律拒绝；
-> 服务器下发的描述符永远无法覆盖本地已固定的 identity。
+<p align="center">
+  <strong>本仓库在原版基础上加强了通讯加密。</strong><br>
+  带 <strong>🆕</strong> 标记的内容是本仓库独有，
+  <a href="https://github.com/liguobao/ds-harness-remote">原版</a>没有。
+</p>
+
+| 项目 | [原版](https://github.com/liguobao/ds-harness-remote) | 本仓库 🆕 |
+| --- | --- | --- |
+| 首次连接的 Host 公钥来源 | 仅服务器 | 服务器，但必须带外核对通过 |
+| 未配对的控制端 | 可以连接 | 拒绝连接——`identity.requireVerifiedPeer` 默认开启 |
+| 配对方式 | — | Host 显示二维码，两端核对 12 位确认码 |
+| 服务器断开空闲隧道 | — | 确认码不失效，手机自动重试到过期 |
+| 重新配对 | — | 设备详情里的「重新配对」，不需要重新绑定账号 |
 
 远程模式支持官方插件页的列表、配置和启用/停用（需更新 Host Remote 插件）。Remote 自身仍只能在 Host 本地配置和启停；不开放远程安装、卸载。
 
@@ -239,7 +247,7 @@ identity key 校验。服务端可以协调连接并看到必要的网络元数�
 工具输出、Workspace 路径或 远端文件内容。握手、密钥生命周期、可见元数据、重放保护和
 安全边界详见[端到端加密](docs/end-to-end-encryption.md)。
 
-### 设备配对（默认强制）
+### 设备配对（默认强制）🆕
 
 服务端是公钥的唯一来源，因此它理论上可以在首次连接时替换公钥完成中间人。配对用两个
 带外通道消除这个可能：
