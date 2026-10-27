@@ -23,6 +23,20 @@ docker compose up -d --build
 
 发布镜像由 GitHub Tag 工作流构建。生产环境应使用 HTTPS 反向代理，不要直接把 Node 监听端口暴露到公网。
 
+### 页面白屏或静态资源返回 403
+
+`DSH_SERVER_PUBLIC_URL` 必须与浏览器实际访问的 origin 一致，包括 `http` / `https`、域名和非默认端口；不要填写容器内部地址或页面路径。例如通过 `https://remote.example.com` 访问时，在 `.env` 设置：
+
+```dotenv
+DSH_SERVER_PUBLIC_URL=https://remote.example.com
+```
+
+修改后执行 `docker compose up -d --force-recreate server`；仅 `docker compose restart` 不会更新环境变量。使用预构建镜像时可加 `--no-build`。保留现有数据卷，不要执行 `down -v`。
+
+如果 JS/CSS 返回 403，且响应 JSON 中为 `AUTH_INVALID`，优先核对上述配置与请求的 `Origin`。Server 在静态资源处理前执行 origin 校验；因此首页可能打开，JS/CSS 却被拒绝，浏览器随后报告 MIME 为 `application/json` 并白屏。不要通过修改 MIME 或删除 origin 校验来绕过。若响应来自反向代理，则检查代理访问规则；代理应保留浏览器原始 `Origin`。
+
+源码 Docker 构建报 protocol 入口无法解析时，也检查文件权限（`ls -ld packages/protocol packages/protocol/package.json`）。镜像会规范化发布文件的读取/目录遍历权限，并在最终 `node` 用户下校验模块加载。
+
 ## 本地启动
 
 需要 Node.js 22、pnpm 9.15.4。在仓库根目录执行：

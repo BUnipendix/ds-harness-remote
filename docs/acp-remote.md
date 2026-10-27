@@ -95,7 +95,7 @@ Web、Desktop 和 Android 共用独立 `agent.acp.*` RPC / stream / transfer / e
 `virtual-harness.ts` 是可在浏览器使用的内存 UI 投影，不读取本机 AGY 文件；工作区和历史
 由 Host ACP 返回。AGY 工作区仅接受 `antigravity:cwd:` ID，不兼容旧 `cursor:cwd:` ID
 或无前缀路径。Cursor / AGY 分别需 `agent.acp.cursor.v1` / `agent.acp.antigravity.v1`；
-`agent.acp.v1` 仅表示公共数据面，不据此推断后端。ACP 尚未发布使用，不增加旧配置或 ID 迁移。
+`agent.acp.v1` 仅表示公共数据面，不据此推断后端。不提供早期 ACP 配置或工作区 ID 的迁移；该限制不表示 ACP 尚未实现或发布。
 独立 Remote Web runtime 的接入和跨设备 E2E 仍待在独立 Server 仓库验证。
 
 ## 配置

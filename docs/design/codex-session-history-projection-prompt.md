@@ -5,7 +5,7 @@
 ## 1. 定位与入口
 
 CodeX 保留在 Remote Plugin 的 `packages/plugin/src/codex/` 独立领域，Host 使用 stdio App Server，Remote 使用 `codex.app.*`。
-Desktop 通过临时 ApiProxy / Typert carrier 复用原生 Workspace / Session / Conversation / Composer；Android 直接消费同一领域并在内存中投影。
+Desktop 通过临时 Typert carrier 复用原生 Workspace / Session / Conversation / Composer；Android 直接消费同一领域并在内存中投影。
 VS Code 当前不增加 CodeX 会话入口。完整 Remote Web runtime 仍在独立 Server 仓库；本仓库最小 Server 只转发加密数据。
 
 用户从 Remote Host 的工作区选择器进入 CodeX Project / Workspace，可选择既有目录或注册 Host 现存目录。

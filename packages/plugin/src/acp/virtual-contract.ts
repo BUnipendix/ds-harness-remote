@@ -98,6 +98,7 @@ export interface AcpClientLike {
   onSessionArchived?(handler: (data: { backend: 'opencode'; sessionId: string; archived: true }) => void): () => void
   sessionModels?(sessionId: string, backend: "cursor" | "claude" | "antigravity" | "pi" | "opencode", signal?: AbortSignal): Promise<AcpSessionModels>
   selectModel?(sessionId: string, backend: "cursor" | "claude" | "antigravity" | "pi" | "opencode", selection: AcpModelSelection, signal?: AbortSignal): Promise<AcpModelSelection>
+  selectPermission?(sessionId: string, backend: "cursor" | "claude" | "antigravity" | "pi" | "opencode", preset: string, signal?: AbortSignal): Promise<unknown>
   workspaceToolCall?(sessionId: string, backend: "cursor" | "antigravity" | "pi" | "opencode", endpoint: typeof ACP_TOOL_CALL_ENDPOINTS[number], args: JsonRecord, signal?: AbortSignal): Promise<unknown>
   createSession(
     cwd: string,
@@ -194,11 +195,6 @@ export function carrierArgs(payload: unknown): JsonRecord {
 
 export function requestArg(args: JsonRecord): JsonRecord {
   return record(args.request ?? args._request ?? args)
-}
-
-export function rcEndpoint(endpoint: string): string {
-  if (endpoint === 'workspace.list') return 'workspace/list'
-  return endpoint.replace('.', '/')
 }
 
 export function success(value: unknown): { ok: true; value: unknown } {
@@ -322,5 +318,29 @@ export class AsyncValueQueue implements AsyncIterable<unknown> {
       if (next.done) return
       yield next.value
     }
+  }
+}
+
+export type AcpPermissionPreset = 'workspace-write' | 'danger-full-access'
+
+export function isAcpPermissionPreset(value: string): value is AcpPermissionPreset {
+  return value === 'workspace-write' || value === 'danger-full-access'
+}
+
+export function acpPermissionsProjection(preset: AcpPermissionPreset | undefined): unknown {
+  return {
+    options: [
+      {
+        value: 'workspace-write',
+        name: 'workspace-write',
+        description: 'Interactive one-time approval for tool executions and commands.',
+      },
+      {
+        value: 'danger-full-access',
+        name: 'danger-full-access',
+        description: 'Auto-approve tool requests for subsequent turns in this session.',
+      },
+    ],
+    currentValue: preset ?? 'Host settings (not reported)',
   }
 }

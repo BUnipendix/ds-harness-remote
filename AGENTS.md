@@ -1,5 +1,35 @@
 # Repository Guide for Agents
 
+## ApiProxy retirement (2026-10-25)
+
+Host 插件、随包 Remote 客户端和 Android 已移除 Harness `0.1.1-rc.2` ApiProxy 兼容。请使用提供官方 Typert Remote carrier 的 Host；仅提供 ApiProxy 或不支持能力发现的旧 Host 会被拒绝，不再降级。CodeX/ACP 保留独立数据面，Desktop 内存投影统一使用 Typert。本轮不改独立 VS Code Client 或独立 Remote Web 仓库。
+旧日期的 rc.2 验证记录仅为历史，不代表当前兼容性。共享 protocol/client-core 保留 VS Code 使用的历史类型和检测分支，不能据此重新启用 Host 或 Android ApiProxy。
+
+本轮验证：全仓 check 与串行生产 build（含 Android Hermes export）、Plugin 57 文件 / 397 tests、Android 35 文件 / 201 tests、DSH bundle 校验、根 GitHub 入口加载与 npm dry-run 检查通过；发布包不包含退役模块。未验证 APK、原生真机或本轮加密跨设备 E2E。Metro noble/hashes exports fallback 警告仍存在。
+
+## Android plugin management (2026-10-27)
+
+Android 新增插件页（工作区标题栏拼图图标与会话侧栏「插件」），只调用 Host 已放行的官方
+pluginManager list/setBundleEnabled/setPluginEnabled 与 settings/describe/mutate，不改 Host allowlist。
+分组为「Remote 适配」（客户端原生渲染的插件，`REMOTE_ADAPTED_PLUGINS`，未安装也提示）、已安装、实验性；
+基础/运行时 bundle 与缺失目录项不显示。设置 namespace 为 entry 的 `patchId`（非 `include:` entryId），
+官方 settings 只暴露 Schemastery `volatile` 字段；表单按 schema 生成，保存带 expectedRevision，
+「恢复默认」对用户覆盖字段执行 unset。deepseek-harness-intelligent-ui 同步将 Widget 策略字段改为
+volatile（读取改为惰性 getter）并加 zh-CN 描述。插件只能在电脑安装：Remote 适配插件未安装或版本过旧（无可编辑设置）时，详情页给出可复制的
+Desktop/CLI 安装命令；`scripts/install.sh` 支持 `INTELLIGENT_UI=1` 安装到同一 profile，README 增加推荐搭配说明。模拟器 + 真实 web profile Host 验证：列表/图标/分组、
+保存并持久化、越界本地拦截、恢复默认、插件停用/启用（profile 恢复原状）。未验证真机、Desktop profile
+（其 intelligent-ui 为独立旧副本）与暗色模式人工烟测。
+
+## WebRTC runtime probe isolation (2026-10-25)
+
+外部原生 WebRTC helper 的候选探测必须显式设置 `ELECTRON_RUN_AS_NODE=1`，不能删除该标记：
+候选可能是 Desktop 的 Electron 可执行程序或其 launcher，否则连接触发探测时会误启动另一个
+Desktop，探测超时关闭 stdout 后可能触发 `write EPIPE`。探测脚本仍须在加载原生 WebRTC 前
+拒绝 Electron，最终 helper 使用独立 Node。核心回归使用真实子进程覆盖 Node 接受、Electron
+拒绝及不进入 GUI 模式；旧探测行为会失败。Plugin check、相关 10 tests、build、DSH bundle
+校验、真实安装版 Electron → Node → native WebRTC offer，以及 Web → 测试 Host 的 LAN
+加密连接通过。未验证本次 Windows/Linux runtime 探测。
+
 本文件面向在当前仓库工作的编码 Agent，记录仓库边界、项目结构、实现状态、验证命令和协作约束。用户产品说明与 Plugin 使用方式见 `README.md`。
 
 ## Repository Boundary
@@ -7,7 +37,7 @@
 当前仓库实现：
 
 - DeepSeek Harness Plugin（Remote Host + 本地 Remote 工作区入口 + dsh-TUI `/remote` 管理命令；无用户可见的 Client 模式）
-- Android Client（账号授权 + Adaptive transport + rc.2 ApiProxy / v0.1.2 alpha.1–rc.1 / v0.1.5 rc.1 与 v0.1.6 alpha.1 Session V3 Typert Remote + 可选 CodeX Remote）
+- Android Client（账号授权 + Adaptive transport + v0.1.2 alpha.1–rc.1 / v0.1.5 rc.1 与 v0.1.6 alpha.1 Session V3 Typert Remote + 可选 CodeX Remote）
 - VS Code Client（账号授权 + Host 信任固定 + rc.2 ApiProxy / v0.1.2 alpha.1–rc.1 / v0.1.5 rc.1 与 v0.1.6 alpha.1 Session V3 Typert Remote 会话/Prompt）
 - Protocol、Crypto、WebRTC、Client Core 等共享能力
 - 开源自部署 Server（`apps/server`）：环境变量单账号、JSON 文件持久化设备凭据、Control/Noise handshake forwarding/opaque Relay、Web 登录与设备状态页，以及 Dockerfile/Compose 部署入口
@@ -26,7 +56,7 @@
 
 ```text
 apps/
-  android/             React Native / Expo Android Client（账号授权 + ApiProxy/Typert/CodeX Remote tunnel）
+  android/             React Native / Expo Android Client（账号授权 + Typert/CodeX Remote tunnel）
   vscode/              VS Code Extension Client（Host 列表、加密连接与远程会话）
   browser/             Chrome/Edge MV3 入口（Web 授权换取独立凭证 + 在线 Host + 打开 Remote Web）
   server/              开源自部署 Server（单账号 Relay、登录/设备状态页、Docker 部署）
@@ -60,9 +90,9 @@ Plugin bundle 构建统一 esbuild 的依赖模块路径标签，避免 pnpm iso
 
 | 模块 | 状态 | 主要剩余工作 |
 | --- | --- | --- |
-| Plugin Host | 账号密码/主机匹配码接入、dsh-TUI 无 browser connection 时默认开启 Host、GitHub/知乎二维码授权与可点击 URL、原生 `/remote` login/status/logout 与 Tab 补全、同账号 peer 校验、隔离身份/凭证、Relay/Noise IK、并发 Client 与按连接隔离的 rc.2 ApiProxy / v0.1.2 alpha.1–rc.1 Typert Remote allowlist bridge 已实现；v0.1.5 rc.1 Session V3 与 v0.1.6 alpha.1 支持已接入，并已在独立 `dsh-v0.1.6-alpha.1` 实例上验证 Web → Host 主链路；真实 Desktop/dsh-TUI 跨机 E2E 已验证；无自定义 Harness 业务适配层 | v0.1.5/v0.1.6 跨机 E2E、legacy owner 恢复体验、allowlist 覆盖审计、跨平台 picker 边界 |
-| Plugin Remote Client | 与 Host runtime 同时启动，无需 Client 模式；Remote 模态框支持 GitHub/知乎扫码与账号密码登录、本机过滤、主机/版本信息、已有 Harness/CodeX Workspace、远端目录浏览与 CodeX Project 注册、ApiProxy/Typert 图片 Prompt/回显，以及配合 dsh-file-viewer 的受限只读文件预览，随后复用原生 Harness UI；加密通道 capability 探测保留 legacy Host 降级并拒绝 ApiProxy/Typert 混连；Web → Host 主链路已在 v0.1.5 rc.1 与 v0.1.6 alpha.1 上验证 | CodeX Project 新建跨设备 E2E、断线重连恢复、页面级导航接口、长期稳定性 |
-| Android | 已迁移到 rc.2 ApiProxy / v0.1.2 Typert Remote 双数据面，并直接接入可选 `codex.app.*`：账号登录注册、成员设备列表与 identity key 固定、Adaptive transport + Noise、capability 探测、Harness/CodeX Workspace 与 Session、远端目录选择与 CodeX Project 注册、工作区收藏与首页快捷链接（点击直达该工作区最近会话）、分页 History/live frame、模型/权限、文字/图片 Prompt、interrupt 与审批，以及跟随系统/英文/简体中文/日语/繁体中文/西语/德语/法语界面；启动时仅有一台设备且在线、已信任时自动进入其工作区列表，否则进入设备列表；会话链接与用户开启的上次会话恢复优先，返回设备列表不重复自动跳转；rc.2/v0.1.2/CodeX 真机跨机 E2E、图片分块、重连和 WebRTC 已验证 | CodeX Project 新建跨设备 E2E、协议 conformance fixtures、长期稳定性与跨设备回归 |
+| Plugin Host | 账号密码/主机匹配码接入、dsh-TUI 无 browser connection 时默认开启 Host、GitHub/知乎二维码授权与可点击 URL、原生 `/remote` login/status/logout 与 Tab 补全、同账号 peer 校验、隔离身份/凭证、Relay/Noise IK、并发 Client 与按连接隔离的 v0.1.2 alpha.1–rc.1 Typert Remote allowlist bridge 已实现；v0.1.5 rc.1 Session V3 与 v0.1.6 alpha.1 支持已接入，并已在独立 `dsh-v0.1.6-alpha.1` 实例上验证 Web → Host 主链路；真实 Desktop/dsh-TUI 跨机 E2E 已验证；无自定义 Harness 业务适配层 | v0.1.5/v0.1.6 跨机 E2E、legacy owner 恢复体验、allowlist 覆盖审计、跨平台 picker 边界 |
+| Plugin Remote Client | 与 Host runtime 同时启动，无需 Client 模式；Remote 模态框支持 GitHub/知乎扫码与账号密码登录、本机过滤、主机/版本信息、已有 Harness/CodeX Workspace、远端目录浏览与 CodeX Project 注册、Typert 图片 Prompt/回显，以及配合 dsh-file-viewer 的受限只读文件预览，随后复用原生 Harness UI；加密通道 capability 探测拒绝 ApiProxy-only Host；Web → Host 主链路已在 v0.1.5 rc.1 与 v0.1.6 alpha.1 上验证 | CodeX Project 新建跨设备 E2E、断线重连恢复、页面级导航接口、长期稳定性 |
+| Android | 使用 v0.1.2+ Typert Remote 数据面，并直接接入可选 `codex.app.*`：账号登录注册、成员设备列表与 identity key 固定、Adaptive transport + Noise、capability 探测、Harness/CodeX Workspace 与 Session、远端目录选择与 CodeX Project 注册、工作区收藏与首页快捷链接（点击直达该工作区最近会话）、分页 History/live frame、模型/权限、文字/图片 Prompt、interrupt 与审批，以及跟随系统/英文/简体中文/日语/繁体中文/西语/德语/法语界面；启动时仅有一台设备且在线、已信任时自动进入其工作区列表，否则进入设备列表；会话链接与用户开启的上次会话恢复优先，返回设备列表不重复自动跳转；历史 rc.2/v0.1.2/CodeX 真机跨机 E2E、图片分块、重连和 WebRTC 已验证 | CodeX Project 新建跨设备 E2E、协议 conformance fixtures、长期稳定性与跨设备回归 |
 | VS Code | Extension 基础已实现：SecretStorage 身份/凭证、账号/扫码登录、Host 指纹固定、Adaptive transport + Noise、rc.2 ApiProxy / v0.1.2 Typert Remote Host→Workspace→Session 导航、Prompt、permission command 与编辑区会话面板 | Extension Host 跨机 E2E、实时流式更新、question 界面与重连恢复 |
 | Browser | Chrome/Edge MV3 轻量入口已实现：临时读取已登录 Web 的授权并换取隔离的 device credential，popup 展示在线 Host，点击后直接打开同源 Remote Web；不承载账号登录、Remote transport、ApiProxy 或会话 UI；unpacked 联调与 Web 授权跳转、独立 Server 合约联调已验证 | 随独立 Server 合约变化同步 |
 | Protocol | Control/Relay 与 ApiProxy tunnel 基础已实现 | 完整 Zod schema、limits、golden vectors |
@@ -70,7 +100,7 @@ Plugin bundle 构建统一 esbuild 的依赖模块路径标签，避免 pnpm iso
 | Relay Transport | Protocol v1 control/relay 已实现 | 心跳、限制协商、断线状态传播 |
 | WebRTC | signaling、ICE、TURN、LAN/P2P/Relay 自适应路径基础已实现，Android 真机与 Host werift 互操作已验证 | 网络切换恢复和长期稳定性 |
 | Client Core | ApiProxy tunnel RPC/Event 关联基础已实现 | reconnect、pending call/stream 恢复 |
-| Codex Remote 领域 | 作为现有 Remote Plugin 内部可选领域：Host stdio App Server、默认开启且可在设置中关闭、固定 allowlist 与连接隔离已实现；Desktop 以 rc.2 ApiProxy / v0.1.2 Typert 内存载体复用 DSH 原生 UI，Android 直接消费同一 `codex.app.*` 并复用移动端 Workspace/Session/Chat；两端可通过受限 `project/create` 将 Host 上已存在的真实目录注册为 Project，并都只保留内存展示投影；既有 Desktop 与 Android 真机 E2E、大 History、断线恢复和多 Client 观察已验证 | Project 新建跨设备 E2E、长期稳定性、跨版本回归和安全审查 |
+| Codex Remote 领域 | 作为现有 Remote Plugin 内部可选领域：Host stdio App Server、默认开启且可在设置中关闭、固定 allowlist 与连接隔离已实现；Desktop 以 v0.1.2 Typert 内存载体复用 DSH 原生 UI，Android 直接消费同一 `codex.app.*` 并复用移动端 Workspace/Session/Chat；两端可通过受限 `project/create` 将 Host 上已存在的真实目录注册为 Project，并都只保留内存展示投影；既有 Desktop 与 Android 真机 E2E、大 History、断线恢复和多 Client 观察已验证 | Project 新建跨设备 E2E、长期稳定性、跨版本回归和安全审查 |
 | Mock Host | 旧 Android Remote RPC 联调工具，当前冻结 | 若恢复 Android 再迁移或替换 |
 | Desktop | Host 设置、Remote 工作区模态框、远程 Header、连接链路与加密状态已接入 Harness Web UI，Host status 由 loopback SSE 推送（无固定间隔的 status 轮询），原生窗口跨机 E2E 已验证 | 多窗口、休眠/唤醒和代理网络回归 |
 | 开源自部署 Server | `apps/server` 已实现单账号授权、设备凭据持久化与刷新、Control/Noise 握手转发和加密 Relay、Web 登录与设备状态页；提供 Dockerfile/Compose；单进程、Relay-only，不提供 Remote Web 会话界面或 WebRTC/TURN | Docker 实际构建与启动验证、真实 Desktop/Android/VS Code 跨机 E2E、反向代理长期连接回归 |
@@ -129,9 +159,11 @@ macOS 仍使用普通用户，优先复用 Desktop 官方 launcher，否则已�
 Desktop 默认保留的 `desktop` profile，只能由其官方 launcher 管理。一次性 Token 复用官方身份/凭据与既有注册码接口，
 不得记录或作为持久设备凭据使用。Windows 用户使用官方插件管理或已有 Harness 的官方命令。
 卸载先按安装指南停用 Linux 系统服务，再通过官方插件管理或 `dsh plugin remove` 移除 Remote；不自动删除 runtime、
-凭据或迁移旧 service。当前内部源码版本为 `0.5.19`，Android `versionCode` / Expo iOS `buildNumber` 为 `64`，未创建该版本 Tag 或 Release；Desktop npm 安装说明保留 `ds-harness-remote@0.5.18`。
+凭据或迁移旧 service。当前待发布版本为 `0.5.21`，Android `versionCode` / Expo iOS `buildNumber` 为 `66`；发版准备已将安装说明同步到 `ds-harness-remote@0.5.21`，Tag、npm 与 GitHub Release 的发布状态以实际发布结果为准。
 
 ## Validation Baseline
+
+以下为历史验收快照，不代表当前源码基线。最近构建结果见文末 `Post-merge 0.5.20 rebuild (2026-10-27)`；当前兼容范围见 `docs/compatibility.zh.md`。
 
 截至 2026-09-16：
 
@@ -158,9 +190,9 @@ Desktop 默认保留的 `desktop` profile，只能由其官方 launcher 管理�
 5. v1 permission decision 只允许 `allow_once | deny`，禁止恢复 `allow_session`。
 6. 按用户 2026-09-20 授权，支持官方原生文件树/只读预览、默认开启且可在详细 Remote 设置中关闭的 `terminal.enabled` 交互终端，以及 `loopback.ports` 明确授权的 HTTP/WebSocket 预览。文件通过官方 `workspaceFiles`/`officeToPdf` 或已有 dsh-file-viewer provider 读取，除下述 2026-10-18 workspace upload 与 2026-10-21 workspace/create 目录创建授权外，禁止新增直接 filesystem 写入、远程桌面或通用 Harness tool RPC。终端以 Host 用户权限运行，独立于 Agent 审批；按设备固定终端归属与连接输入权，断线不重放输入。loopback Host 只出站连接 `127.0.0.1` 白名单端口；Desktop Client 可监听随机本机端口承载独立预览 origin，禁止监听公网、任意目标、CONNECT 和通用 TCP 转发。
 7. Token、私钥、主机匹配码、prompt、源码和工具输出不得写日志。
-8. Harness v0.1.1 rc.2 业务层只使用官方 `ApiProxy`，v0.1.2 alpha.1–rc.1 与 v0.1.5 rc.1 / v0.1.6 alpha.1 Session V3 业务层只使用官方 `TypertGateway` Remote carrier；原生侧栏使用官方 `workspaceFiles` / `officeToPdf` / `terminal` 固定 allowlist；保留 dsh-file-viewer provider 通道。除规则 10 规定的 CodeX 内存展示载体外，禁止增加 session/agent/workspace/permission adapter、另一套 Harness wire format 或通用文件系统协议。
+8. Harness v0.1.1 rc.2 ApiProxy 已移除；v0.1.2 alpha.1–rc.1 与 v0.1.5 rc.1 / v0.1.6 alpha.1 Session V3 业务层只使用官方 `TypertGateway` Remote carrier；原生侧栏使用官方 `workspaceFiles` / `officeToPdf` / `terminal` 固定 allowlist；保留 dsh-file-viewer provider 通道。除规则 10 规定的 CodeX 内存展示载体外，禁止增加 session/agent/workspace/permission adapter、另一套 Harness wire format 或通用文件系统协议。
 9. 不修改用户已有变更，不提交 `node_modules`、Expo cache、Android build 产物或个人 Agent 配置；唯一允许提交的 `dist` 是根 DSH GitHub Bundle 所需的 `packages/plugin/dist/index.js` 与 `client.github.js`，另需保留根 Host 入口 `index.js`。
-10. Codex 支持必须保留在现有 Remote Plugin 内，并作为 `packages/plugin/src/codex/` 独立业务领域实现；默认开启且可在设置中关闭，使用独立 capability/RPC/event/state。允许 Client Plugin 以临时 rc.2 ApiProxy / v0.1.2 Typert 载体复用 DSH 原生 UI，也允许 Android 直接消费同一 `codex.app.*` 并只在内存中投影其移动端 Workspace/Session/Chat；两者都禁止写入 DSH SessionStore、Workspace 数据库或 Harness 日志。远端只允许编译期固定 App Server allowlist；Workspace authority 优先来自 CodeX App Server 的 `project/list`，该接口不可用或无可用根目录时才可回退到 App Server 已通过 `thread/list` 返回的绝对 `cwd`。`project/create` 只可注册 Host 上已存在的单个绝对目录，Host 必须执行 `realpath` 并确认目标是目录，且上游返回的新 Project 才能扩展 authority。新 Thread 还可使用这些 authority 根内经过词法路径与 `realpath` 双重校验的真实子目录，禁止推测共同父目录或越界接受 Client 自报路径。
+10. Codex 支持必须保留在现有 Remote Plugin 内，并作为 `packages/plugin/src/codex/` 独立业务领域实现；默认开启且可在设置中关闭，使用独立 capability/RPC/event/state。允许 Client Plugin 以临时 Typert 载体复用 DSH 原生 UI，也允许 Android 直接消费同一 `codex.app.*` 并只在内存中投影其移动端 Workspace/Session/Chat；两者都禁止写入 DSH SessionStore、Workspace 数据库或 Harness 日志。远端只允许编译期固定 App Server allowlist；Workspace authority 优先来自 CodeX App Server 的 `project/list`，该接口不可用或无可用根目录时才可回退到 App Server 已通过 `thread/list` 返回的绝对 `cwd`。`project/create` 只可注册 Host 上已存在的单个绝对目录，Host 必须执行 `realpath` 并确认目标是目录，且上游返回的新 Project 才能扩展 authority。新 Thread 还可使用这些 authority 根内经过词法路径与 `realpath` 双重校验的真实子目录，禁止推测共同父目录或越界接受 Client 自报路径。
 
 Android 的本机浏览状态可单独保存加密草稿、收藏、阅读位置与最近访问记录；不再持久化对话正文预览，按 Server/账号/Host identity 隔离；不保存审批句柄、待发送请求、权限或图片字节，不写 DSH SessionStore/Workspace。联网历史与原生权限仍是执行依据。
 
@@ -207,6 +239,8 @@ fixtures 全部保留，按操作及 Control frame 类型注册为 24 个契约�
 
 ## Documentation Rules
 
+- 调试、验收截图与录屏不提交到仓库；本地留档使用已忽略的 `artifacts/` 或 `docs/screenshots/`。README 使用的 `docs/images/` 展示图与应用运行所需图片资源保留。
+- 对外发布说明与新版本 Changelog 只写用户可感知的功能、修复、兼容性变化和贡献者；不附测试数量、构建命令、bundle 校验、未验收清单或构建警告等验证流水账。内部验证结果与边界保留在 AGENTS.md / TODO。
 - `README.md`：面向用户的默认英文入口，也是 GitHub 默认 README；写项目介绍、特性、安全边界、Plugin/Client 使用和开源 Server 自部署入口。
 - `README.en.md`：保留的英文入口，与默认 `README.md` 保持内容一致。
 - `README.zh.md`：保留的中文入口，与默认 `README.md` 保持功能和版本信息一致。
@@ -631,7 +665,7 @@ Android production Hermes export 与 diff 检查通过；保留既有 Metro nobl
 内置自动化任务沿用官方 Typert carrier，固定放行 schedule/list、catalog、history、update、delete。
 更新保留官方 expected record 冲突校验与 session/task 绑定，Remote 不实现第二套调度器或持久化。
 schedule/changed 复用官方 $events；创建由会话中的 schedule_create 工具执行，不开放不存在的
-schedule/create Remote 端点。只覆盖原生 Desktop/浏览器界面，不新增 Android 管理页。
+schedule/create Remote 端点。该日期仅覆盖原生 Desktop/浏览器界面；2026-10-27 已合并 #176 的 Android 管理页，当前验收缺口见 docs/TODO.md。
 本次共享包/Plugin build、Plugin check、三个 carrier/bridge 测试文件 39 tests、DSH bundle
 校验和 git diff --check 通过；真实跨设备 UI 和多 Client 变更刷新验收仍待完成，未发布。
 
@@ -670,3 +704,98 @@ Mutation 不重试，后台停止团队/群聊进度轮询；UI 卡片纯原生�
 来源/许可证，升级时审查 schema 和解释器边界。真机/跨设备验收见 TODO，未发布。
 
 验证：Android check 与 33 文件 / 195 tests、Plugin check 与 19 个 route 契约测试、共享包/Plugin build、DSH bundle 校验及 Android production Hermes export 通过。保留既有 noble/hashes exports fallback 警告；本机无连接设备，未验证本次 APK/真机、TalkBack 或加密跨设备交互。
+
+
+## 0.5.19 release preparation (2026-10-26)
+
+发布候选维持 `0.5.19`，Android `versionCode` / Expo iOS `buildNumber` 均为 `64`。
+中英文发布说明补齐 Android 滚动/阅读密度、CodeX 权限继承、图片预览与 ApiProxy
+退役等改动及贡献者；安装入口与 npm README 同步版本。CI/Release 扩展 ZIP 补齐
+manifest 所需的 `_locales`，实际打包核验默认语言、消息键、入口与图标。
+
+全仓 check 与 796 tests 通过（Plugin 57 文件 / 397，Android 36 文件 / 207），
+串行生产 build（Android Hermes，包含 CI 固定哈希的 Intelligent UI renderer）、
+版本一致性、DSH bundle、根 GitHub 入口加载、npm 实际打包与 diff check 通过。
+两份已提交 Plugin bundle 重建无差异；npm 包不含退役 rc.2 模块。
+未构建本轮 APK、未新增原生真机、Windows/Linux helper 或加密跨设备验收。
+Metro noble/hashes exports fallback 警告仍存在；发布以 Tag 工作流实际结果为准。
+
+
+## Desktop generation install / packed WebRTC fallback (Issue #149)
+
+基于 @Sandwich-git 的 #151 内联方向，将 werift 从 root/plugin 生产依赖移到 Plugin
+开发依赖；Host ESM banner 使用模块局部 createRequire，为内联 CommonJS 的 Node builtin
+加载提供 require，不修改全局对象。保留 0.5.19 / Android build 64 发布准备。
+
+`node scripts/verify-packed-webrtc.mjs` 在仓库构建后分别 pack root GitHub 与 npm Plugin，
+安装到临时生产 generation（禁用安装脚本、自动 peer 与原生 optional addon），Host peer
+置于独立 installation closure。检查每个生产包的依赖解析路径，故意不放行 builtin id，
+覆盖原 buffer 判定失败。此检查复现相关路径约束，不等同于运行真实 Desktop/app.asar
+安装器，也不模拟其完整 peer 协商或更新/回滚事务。
+
+子进程先加载未修改的包入口，再通过 Node loader 仅追加内部函数 export，调用同一 packed
+bundle 中真实 loadNodeRtcFactory / RtcDataChannelTransport；不替换其实现、不导入源码。
+阻止外置 werift 和 native addon，验证延迟初始化、首次/并发/缓存加载、有序双向帧及关闭。
+CI 在正常 Linux Node 22 环境运行原始脚本。旧 #151 bundle 在同一脚本下首次 fallback
+返回 undefined，可检出未绑定 require 的回归。
+
+本地 Node 24 容器禁止 os.networkInterfaces（ERR_SYSTEM_ERROR），但允许真实 loopback
+UDP；产物烟测以 scratch-only preload 提供 127.0.0.1 枚举 fixture，未 mock WebRTC/UDP。
+最终两种 packed 边界通过（GitHub 35 / npm 37 个生产包）。一次 npm loopback 建连曾在
+DataChannel 打开前报 RTC_FAILED，原样重跑两种边界均通过，仍需正常 CI 复核稳定性。
+标准 Plugin 单测为 393/397：两项因网卡枚举失败，另两项 native/default backend 八秒
+建连超时，不算全量通过，也不把后两项的具体根因当作已确认。
+Plugin check、共享包/Plugin build、DSH bundle 校验、生产重建哈希一致性和 diff check
+通过。真实 Desktop 更新/回滚、Windows/Electron 与跨设备 E2E 未新增验收。
+旧 generation 的依赖树不会被新插件重写；恢复旧包仍需要宿主正确识别 builtin 或使用
+官方插件管理恢复路径，不能宣称本修复覆盖所有历史回滚。
+
+## Desktop signed-out account recovery (2026-10-26)
+
+Client 的 loopback control 错误必须保留 `details.remoteCode`（优先）及外层 `code`，
+不能仅转成普通 Error 文案，否则未登录/授权失效会被当作临时网络失败，重新打开 Remote
+仍展示空主机列表与退出账号，而不显示登录入口。保持 Host 设备发现的授权拦截。
+既有核心授权矩阵补齐未登录/无归属，并贯通真实 control envelope 到 Client 解码。
+共享包及 Plugin build、Plugin check、相关 26 tests、DSH bundle 与 diff check 通过。
+本机当前窗口可显示登录页；未执行完整 Desktop 退出重启或重新登录的跨设备验收。
+
+未登录的插件设置页提供「登录账号」，通过同一插件实例的回调打开已有 Remote 登录窗口；
+Server 地址未保存时提示先保存并禁用入口。0.5.20 Plugin check/build、DSH bundle 与 diff
+check 通过；隔离浏览器加载真实 client bundle 验证入口打开登录页及地址草稿的禁用/恢复。
+纯 UI 不新增自动化测试，未完成真实账号重新登录或 Desktop 重启验收。
+
+## Post-merge 0.5.20 rebuild (2026-10-27)
+
+合并 #172、#174、#175、#176，并保留本地 Desktop 登录修复后重新构建；版本维持
+`0.5.20`，Android `versionCode` / Expo iOS `buildNumber` 为 `65`。共享包和 Plugin
+build、全仓 check、847 tests（Plugin 404、Android 250）、串行生产 build（包含
+Android Hermes）通过。Android 使用 CI 固定提交及文件哈希的 Intelligent UI renderer。
+两份已提交 Plugin bundle 重建无差异，普通与生产构建 SHA256 一致；DSH bundle、
+根 GitHub 入口加载、npm 实际打包、浏览器扩展 ZIP 与 diff check 通过。
+
+GitHub/npm packed WebRTC 的生产依赖闭包、原生不可用时的回退及双向 DataChannel
+校验通过。macOS 默认临时目录 `/var` 与 realpath `/private/var` 的差异会触发既有
+校验脚本的路径边界误判，本轮使用规范化的 `TMPDIR=/private/tmp` 运行原脚本通过。
+产物与日志保留在忽略的 `artifacts/rebuild-0.5.20/`；未新增 APK、原生真机或跨设备
+验收，未发布 npm/Tag/Release。Metro noble/hashes exports fallback 警告仍存在。
+
+## Remote Agent tools (2026-10-27)
+
+从独立功能分支选择性恢复 Remote Tools 至 main；不引入 @ 主机补全、mention control endpoints、派发或自动导航。通过官方 tools 服务注册 Host/Workspace 发现及 Harness 会话 list/read/create/send/wait/interrupt/operation 工具，复用账户授权、identity 固定及加密 carrier；CodeX/ACP 仅发现工作区。UI 已连接同一 Host 时复用连接，否则使用查询生命周期内的临时连接，不改变 UI 选择。操作回执仅内存保存，未知投递不得自动重发。保留主线 ClientReconnect 状态机。
+
+本轮 Plugin check、61 文件 / 417 tests、Plugin build、DSH bundle 校验与 git diff --check 通过。未进行本轮真实跨设备 E2E 或全仓构建。
+
+Remote Tools 文件下载：remote_download_file 只读官方 workspaceFiles/stat/readBytes，先校验 Harness workspace/session 归属，拒绝绝对路径与父级越界。固定最大 50 MiB / 分块 256 KiB，校验版本、大小、offset/eof，取消/失败删除临时下载目录。本机 Downloads/dsh-remote-* 私有独立目录保存，不覆盖文件，不把内容放入工具返回。此本机下载写入按本轮用户明确要求实现，不增加 Host 写入权限。
+
+Remote upload tool (2026-10-27)：remote_upload_file 仅支持 Harness，先验证 Host/workspace/session 归属，再读取插件运行机器的绝对 localPath，拒绝最终路径符号链接和非普通文件。沿用 workspace.upload.open/chunk/commit/abort 专用上传协议、20 MiB / 64 KiB 上限与 Host 不覆盖发布规则。使用 operationId 内存回执去重，提交结果不确定返回 unknown，不自动重发。返回路径与元数据，不返回文件内容。不增加通用 Host filesystem RPC。
+
+Remote Tools 大文件上传：实际 LAN / 直连 P2P 最大 1 GiB（1024³ bytes），TURN / Relay / unknown 保持 20 MiB；Host 从认证 channel.mode 的动态 getter 取得路径，open/chunk/commit 复查，回退中继后拒绝大文件并清理临时数据；Client 同步检查 getStats().mode。64 KiB 分块不变，工具总超时 1 小时。旧 Host 仍可能按 20 MiB 拒绝。下载限额未调整。
+
+## First-install Remote authorization view (2026-10-27)
+
+Remote 窗口先通过 loopback `client.authorization.status` 只读检查本地 Client 凭据，
+不刷新凭据、不注册设备、不发起 Server 请求。无凭据显示登录；有凭据再发现 Host，
+成功后展示列表。首次检查期间保持未决状态；网络或本地读取失败展示错误并允许刷新，
+保留已知列表，不将失败解释为退出登录；明确授权错误码才回登录。空主机文案仅用于
+成功的空列表，不用于请求失败。Plugin check、client-runtime 17 个核心测试、build、
+DSH bundle 与 diff check 通过；未新增 Windows 首次安装或跨设备验收。

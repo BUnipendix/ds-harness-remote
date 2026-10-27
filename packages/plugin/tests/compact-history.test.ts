@@ -36,7 +36,7 @@ describe('compact history recovery contract', () => {
     const domain = { call, detachPeer: vi.fn(async () => undefined) }
     const a = new CodexPeerBridge(domain as never, { connectionId: 'a' } as never, async () => undefined)
     const b = new CodexPeerBridge(domain as never, { connectionId: 'b' } as never, async () => undefined)
-    const router = new RpcRouter(undefined, 128, undefined, undefined, undefined, undefined, a)
+    const router = new RpcRouter(128, undefined, undefined, undefined, undefined, a)
     const request = { method: 'dsh/sessionHistory', params: { threadId: 'thread' } }
     expect(await router.handle(createRpcRequest('remote.history.configure', { compact: true }))).toMatchObject({ type: 'rpc.response' })
     expect(await a.call(request)).toEqual(compactHistory(source))

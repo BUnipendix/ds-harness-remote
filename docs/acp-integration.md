@@ -100,7 +100,7 @@ Host 决定工作目录与会话归属；capability 表示协议支持，`worksp
 
 ## 新增 ACP 后端
 
-仅向 `acp.backends` 添加 command/args 不会自动实现 adapter。当前 gateway 明确识别 Cursor / Antigravity，不按可执行文件名称猜测后端。
+仅向 `acp.backends` 添加 command/args 不会自动实现 adapter。当前 gateway 明确识别 Cursor / Antigravity / Pi / OpenCode / Claude，不按可执行文件名称猜测后端。
 
 1. **实现进程 adapter**：参考 [adapter.ts](../packages/plugin/src/acp/adapter.ts) 的 `start / close / isReady / call / respond / respondError / onInbound / onUnavailable` 契约，在 `acp/adapters/` 实现固定后端 ID、请求关联、通知与退出清理。原生 ACP 可参考 Cursor；其他协议需像 AGY 一样明确适配。
 2. **注册 Host 生命周期**：在 [gateway.ts](../packages/plugin/src/acp/gateway.ts) 接入后端创建、支持列表、后台启动、就绪检测和 reconfigure。关闭时取消启动，迟到初始化不能重新注册；不可用后端不能静默降级。

@@ -1,8 +1,7 @@
 import type { HarnessAlphaClient } from '@dsh-remote/client-core'
-import type { RemoteApiProxy } from './api-proxy'
 import type { ChatMessage } from '../types'
 
-type ActionClient = RemoteApiProxy | HarnessAlphaClient
+type ActionClient = HarnessAlphaClient
 
 /** Exact cut only, never silently fork the latest state or fabricate a local session. */
 export async function forkMessage(message: ChatMessage, proxy: ActionClient) {

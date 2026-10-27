@@ -286,9 +286,9 @@ export class AdaptiveTransport extends BaseTransport {
         return
       }
       if (frame.type === 'connect.rejected' || frame.type === 'error') {
-        const payload = frame.payload as { message?: unknown; code?: unknown }
+        const payload = frame.payload as { message?: unknown; code?: unknown; retryable?: unknown }
         const message = typeof payload.message === 'string' ? payload.message : 'Server rejected the connection'
-        throw Object.assign(new Error(message), { code: payload.code })
+        throw Object.assign(new Error(message), { code: payload.code, retryable: payload.retryable })
       }
       if (frame.type === 'relay') {
         if (this.dataMode !== 'relay') return
@@ -324,7 +324,9 @@ export class AdaptiveTransport extends BaseTransport {
       if (frame.type === 'signal.offer' || frame.type === 'transport.selected') return
       if (frame.type === 'ping') this.sendControl('pong', frame.payload)
     } catch (error) {
-      this.failConnection(error instanceof Error ? error : new Error('Invalid adaptive control frame'), { reason: 'invalid-control-frame' })
+      const failure = error instanceof Error ? error : new Error('Invalid adaptive control frame')
+      if (!('code' in failure)) Object.assign(failure, { code: 'INVALID_MESSAGE' })
+      this.failConnection(failure, { reason: 'invalid-control-frame' })
     }
   }
 
@@ -518,7 +520,7 @@ export class AdaptiveTransport extends BaseTransport {
   }
 
   private sendControl(type: Parameters<typeof createControlFrame>[0], payload: unknown): void {
-    if (this.socket?.readyState !== WebSocket.OPEN) throw new Error('adaptive control socket is not open')
+    if (this.socket?.readyState !== WebSocket.OPEN) throw Object.assign(new Error('adaptive control socket is not open'), { code: 'TRANSPORT_CLOSED' })
     this.socket.send(encodeControlFrame(createControlFrame(type, payload), this.controlFrameLimits))
     this.lastControlSentAt = Date.now()
   }
@@ -556,7 +558,7 @@ export class AdaptiveTransport extends BaseTransport {
     if (established && diagnostic !== undefined) {
       try { this.options.onDisconnect?.(diagnostic) } catch { /* diagnostics must not prevent close */ }
     }
-    if (socket !== undefined) this.emitClose()
+    if (socket !== undefined) this.emitClose(error)
   }
 
   private clearHandshake(): void {
@@ -570,7 +572,10 @@ function adaptiveControlCloseError(event: CloseEvent): Error {
   const detail = reason.length > 0
     ? `${reason} (WebSocket ${event.code})`
     : `WebSocket closed with code ${event.code}`
-  return new Error(`Adaptive control channel closed before it was ready: ${detail}`)
+  return Object.assign(new Error(`Adaptive control channel closed: ${detail}`), {
+    code: event.code === 4003 ? 'CONNECTION_REPLACED' : 'TRANSPORT_CLOSED',
+    retryable: event.code === 1000 || event.code === 1001 || event.code === 1006 || event.code === 1011 || event.code === 1012 || event.code === 1013,
+  })
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

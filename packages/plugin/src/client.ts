@@ -1,6 +1,7 @@
 import type { Translate } from './client-locale.js'
 import { en, localeNamespace, zh } from './client-locale.js'
 import { createRemoteSessionHeaderAction } from './client/header.js'
+import { unwrapControlResult } from './client/control-result.js'
 import { pendingWorkspaceSelectionKey, storedWorkspaceSelection, workspacesReady } from './client/navigation.js'
 import { connectedProgress, connectionErrorMessage, messageOf } from './client/presentation.js'
 import { createRemoteProgressView, runConnectHostProgress } from './client/progress.js'
@@ -30,6 +31,7 @@ import {
 } from './remote-file-content-provider.js'
 import type { StatusFeed } from './status-stream.js'
 import { createStatusFeed } from './status-stream.js'
+import { subscribeRemoteRecovery } from './client-recovery.js'
 
 declare global {
   interface Window {
@@ -285,7 +287,7 @@ window.__ModuleLoader__.load({
     }
 
     function apply(ctx: {
-      connection: { rpc: { call(channel: string, endpoint: string, payload: unknown): Promise<ControlResult> } }
+      connection: { rpc: { call(channel: string, endpoint: string, payload: unknown): Promise<ControlResult> }; reconnect?(): void }
       effect(effect: () => (() => void), label: string): void
       inject(services: string[], callback: (ctx: {
         effect(effect: () => (() => void), label: string): void
@@ -313,6 +315,12 @@ window.__ModuleLoader__.load({
       }, 'ds-harness-remote: plugin route fetch')
 
       const t = ctx.locale.bind(localeNamespace)
+      const remoteOpenListeners = new Set<() => void>()
+      const openRemote = (): void => { for (const listener of remoteOpenListeners) listener() }
+      const subscribeOpen = (listener: () => void): (() => void) => {
+        remoteOpenListeners.add(listener)
+        return () => { remoteOpenListeners.delete(listener) }
+      }
       let controlRouteRetryAfter = 0
       let controlRouteBackoffIndex = 0
       const control = async <T,>(endpoint: string, payload: unknown = {}): Promise<T> => {
@@ -332,8 +340,7 @@ window.__ModuleLoader__.load({
           if (endpoint === 'status') return controlRouteUnavailableStatus() as T
           throw new ControlRouteUnavailableError(t('remoteControlUnavailable'))
         }
-        if (!result.ok) throw new Error(result.error?.message ?? t('remoteRequestFailed'))
-        return result.value as T
+        return unwrapControlResult(result, t('remoteRequestFailed')) as T
       }
       // One pushed status stream feeds every Host-status render in this page.
       // Hosts without the event stream keep answering the unary status control
@@ -346,6 +353,16 @@ window.__ModuleLoader__.load({
         },
       })
       ctx.effect(() => () => statusFeed.close(), 'ds-harness-remote: status stream')
+      ctx.effect(() => {
+        const unsubscribe = statusFeed.subscribe(status => {
+          document.documentElement.classList.toggle('dshRemoteBrowserUnavailable', status.mode === 'remote')
+        })
+        return () => {
+          unsubscribe()
+          document.documentElement.classList.remove('dshRemoteBrowserUnavailable')
+        }
+      }, 'ds-harness-remote: hide local browser entry in remote mode')
+      ctx.effect(() => subscribeRemoteRecovery(statusFeed, () => ctx.connection.reconnect?.()), 'ds-harness-remote: carrier recovery')
       ctx.effect(() => {
         let disposed = false
         let unsubscribeWorkspaces: (() => void) | undefined
@@ -467,6 +484,7 @@ window.__ModuleLoader__.load({
         inject: () => ({
           control,
           statusFeed,
+          subscribeOpen,
           preferredQrProvider: ctx.locale.getLocale().active === 'zh' ? 'zhihu' : 'github',
         }),
       }, RemoteWorkspaceAction))
@@ -481,7 +499,7 @@ window.__ModuleLoader__.load({
         name: 'plugins.row.config',
         key: 'ds-harness-remote#ds-harness-remote',
         locale: localeNamespace,
-        inject: () => ({ control, statusFeed }),
+        inject: () => ({ control, statusFeed, onSignIn: openRemote }),
       }, RemotePluginOptions))
       // Bundle-scoped: installed-bundle details resolve configuration by
       // package name.
@@ -489,7 +507,7 @@ window.__ModuleLoader__.load({
         name: 'plugins.bundle.config',
         key: 'ds-harness-remote',
         locale: localeNamespace,
-        inject: () => ({ control, statusFeed }),
+        inject: () => ({ control, statusFeed, onSignIn: openRemote }),
       }, RemotePluginOptions))
     }
 

@@ -56,7 +56,7 @@ socket.on('open', () => {
     deviceId,
     accessToken,
     protocols: [PROTOCOL_VERSION],
-    clientVersion: '0.5.19',
+    clientVersion: '0.5.21',
     capabilities: ['transport.relay', 'harness.api.v1'],
   })
 })
@@ -421,7 +421,7 @@ async function registerDevice(): Promise<{ accessToken: string }> {
     role: 'host',
     platform: process.platform,
     identityKey: keyPair.publicKey,
-    clientVersion: '0.5.19',
+    clientVersion: '0.5.21',
     harnessVersion: 'dev-preview',
   }
   if (email !== undefined && password !== undefined) {

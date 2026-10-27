@@ -13,6 +13,7 @@ export class ClientSecureTransport implements RemoteTransport {
   private closed = false
   private lifetime?: AbortController
   private readonly sends = new SerialSend()
+  private closeError?: Error
 
   constructor(
     private readonly inner: SecureHandshakeTransport,
@@ -24,6 +25,7 @@ export class ClientSecureTransport implements RemoteTransport {
     const lifetime = new AbortController()
     this.lifetime = lifetime
     this.closed = false
+    this.closeError = undefined
     this.incoming.reset()
     this.outgoing.reset()
     await this.inner.connect()
@@ -31,7 +33,7 @@ export class ClientSecureTransport implements RemoteTransport {
     const info = this.inner.connectionInfo()
     if (info.localDeviceId !== this.identity.deviceId || info.remoteDeviceId !== this.host.deviceId) {
       await this.inner.close()
-      throw new Error('The relay connection is bound to an unexpected device.')
+      throw Object.assign(new Error('The relay connection is bound to an unexpected device.'), { code: 'PEER_IDENTITY_MISMATCH' })
     }
     const noise = new NoiseIkSession({
       role: 'initiator',
@@ -76,6 +78,7 @@ export class ClientSecureTransport implements RemoteTransport {
         const message = this.incoming.decode(noise.decrypt(data))
         if (message !== undefined) handler(message)
       } catch {
+        this.closeError = Object.assign(new Error('The authenticated Remote channel rejected a frame.'), { code: 'SECURE_CHANNEL_FAILED' })
         void this.close()
       }
     })
@@ -85,8 +88,8 @@ export class ClientSecureTransport implements RemoteTransport {
     }
   }
 
-  onClose(handler: () => void): () => void {
-    return this.inner.onClose?.(handler) ?? (() => undefined)
+  onClose(handler: (error?: Error) => void): () => void {
+    return this.inner.onClose?.(error => handler(this.closeError ?? error)) ?? (() => undefined)
   }
 
   async close(): Promise<void> {
@@ -138,10 +141,10 @@ async function waitForResponder(inner: SecureHandshakeTransport, noise: NoiseIkS
         if (!noise.complete) throw new Error('Noise IK handshake did not complete.')
         finish()
       } catch (error) {
-        finish(error instanceof Error ? error : new Error('Noise IK handshake failed.'))
+        finish(Object.assign(error instanceof Error ? error : new Error('Noise IK handshake failed.'), { code: 'SECURE_CHANNEL_FAILED' }))
       }
     })
-    unsubscribeClose = inner.onClose?.(() => finish(new Error('Control channel closed during Noise IK handshake.'))) ?? (() => {})
+    unsubscribeClose = inner.onClose?.(error => finish(error ?? new Error('Control channel closed during Noise IK handshake.'))) ?? (() => {})
     signal.addEventListener('abort', onAbort, { once: true })
     if (signal.aborted) { onAbort(); return }
     void inner.sendHandshake(1, noise.writeHandshake()).catch(error => {

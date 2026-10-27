@@ -10,7 +10,6 @@ import {
 import { z } from 'zod'
 import type { LoopbackHost } from './loopback-host.js'
 import type { RemoteFileViewerBridge } from './file-viewer-bridge.js'
-import type { HarnessApiBridge } from './harness-api-bridge.js'
 import type { HarnessRemoteBridge } from './harness-remote-bridge.js'
 import type { SafeLogger } from './logging.js'
 import type { CodexPeerBridge } from './codex/peer-bridge.js'
@@ -27,15 +26,6 @@ const historyConfigureSchema = z.object({ compact: z.boolean() }).strict()
 const apiMethods = new Set([
   'harness.transport.describe',
   'remote.history.configure',
-  'harness.api.call',
-  'harness.api.transfer.open',
-  'harness.api.transfer.chunk',
-  'harness.api.transfer.commit',
-  'harness.api.transfer.read',
-  'harness.api.transfer.close',
-  'harness.api.respond',
-  'harness.api.stream.open',
-  'harness.api.stream.close',
   'harness.remote.call',
   'harness.remote.transfer.open',
   'harness.remote.transfer.chunk',
@@ -72,8 +62,6 @@ const apiMethods = new Set([
 ])
 
 export const HOST_CAPABILITIES = [
-  'harness.api.v1',
-  'harness.api.transfer.v1',
   'harness.remote.v1',
   'harness.remote.transfer.v1',
   'fileviewer.read.v1',
@@ -88,7 +76,6 @@ export class RpcRouter {
   private active = 0
 
   constructor(
-    private readonly harnessApi: HarnessApiBridge | undefined,
     private readonly maxPending = 128,
     private readonly logger?: SafeLogger,
     private readonly fileViewer?: RemoteFileViewerBridge,
@@ -105,7 +92,6 @@ export class RpcRouter {
   async closePeerStreams(): Promise<void> {
     this.loopback?.closeAll()
     await Promise.all([
-      this.harnessApi?.closeAll(),
       this.harnessRemote?.closeAll(),
       this.codex?.closeAll(),
       this.acp?.closeAll(),
@@ -162,7 +148,9 @@ export class RpcRouter {
     switch (method) {
       case 'harness.transport.describe': {
         emptyParamsSchema.parse(params)
-        const capabilities = [...new Set([...this.capabilities(), 'remote.history.compact.v1'])]
+        const capabilities = [...new Set([...this.capabilities(), 'remote.history.compact.v1',
+          ...(this.harnessRemote === undefined ? [] : ['harness.remote.stream.transfer.v1']),
+        ])]
         let workspaceTypes: RemoteWorkspaceTypeDescription[] | undefined
         if (this.workspaceTypes !== undefined) {
           try {
@@ -178,20 +166,11 @@ export class RpcRouter {
       }
       case 'remote.history.configure': {
         const { compact } = historyConfigureSchema.parse(params)
-        for (const bridge of [this.harnessApi, this.harnessRemote, this.codex, this.acp]) {
+        for (const bridge of [this.harnessRemote, this.codex, this.acp]) {
           if (bridge !== undefined) bridge.compactHistoryEnabled = compact
         }
         return { compact }
       }
-      case 'harness.api.call': return this.requireApiProxy().call(params)
-      case 'harness.api.transfer.open': return this.requireApiProxy().openTransfer(params)
-      case 'harness.api.transfer.chunk': return this.requireApiProxy().appendTransfer(params)
-      case 'harness.api.transfer.commit': return this.requireApiProxy().commitTransfer(params)
-      case 'harness.api.transfer.read': return this.requireApiProxy().readTransfer(params)
-      case 'harness.api.transfer.close': return this.requireApiProxy().closeTransfer(params)
-      case 'harness.api.respond': return this.requireApiProxy().respond(params)
-      case 'harness.api.stream.open': return this.requireApiProxy().openStream(params)
-      case 'harness.api.stream.close': return this.requireApiProxy().closeStream(params)
       case 'harness.remote.call': return this.requireRemoteGateway().call(params)
       case 'harness.remote.transfer.open': return this.requireRemoteGateway().openTransfer(params)
       case 'harness.remote.transfer.chunk': return this.requireRemoteGateway().appendTransfer(params)
@@ -238,13 +217,6 @@ export class RpcRouter {
       case 'plugin.route.call': return this.requirePluginRoute().call(params)
       default: throw new RpcError('METHOD_NOT_FOUND', 'The requested method does not exist.')
     }
-  }
-
-  private requireApiProxy(): HarnessApiBridge {
-    if (this.harnessApi === undefined) {
-      throw new RpcError('FEATURE_NOT_SUPPORTED', 'This Harness version does not provide the legacy ApiProxy transport.')
-    }
-    return this.harnessApi
   }
 
   private requireRemoteGateway(): HarnessRemoteBridge {

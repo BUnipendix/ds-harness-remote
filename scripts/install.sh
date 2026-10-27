@@ -95,6 +95,11 @@ fi
 [[ "$DSH_PROFILE" =~ ^[A-Za-z0-9_-]+$ ]] || fail 'Invalid DSH_PROFILE.'
 REMOTE_VERSION=${REMOTE_VERSION:-latest}
 [[ "$REMOTE_VERSION" != -* && "$REMOTE_VERSION" != *[[:space:]]* ]] || fail 'Invalid REMOTE_VERSION.'
+# Optional companion: Intelligent UI renders natively in the Remote clients.
+INTELLIGENT_UI=${INTELLIGENT_UI:-0}
+[[ "$INTELLIGENT_UI" = 0 || "$INTELLIGENT_UI" = 1 ]] || fail 'INTELLIGENT_UI must be 0 or 1.'
+INTELLIGENT_UI_VERSION=${INTELLIGENT_UI_VERSION:-latest}
+[[ "$INTELLIGENT_UI_VERSION" != -* && "$INTELLIGENT_UI_VERSION" != *[[:space:]]* ]] || fail 'Invalid INTELLIGENT_UI_VERSION.'
 # This helper runs in the actual profile package directory with its own Node.
 # !!js is represented as inert data, never evaluated.
 # Avoid command-substitution heredoc parsing bugs in macOS Bash 3.2. read
@@ -239,6 +244,11 @@ run_helper() { "$DSH_COMMAND" plugin --profile "$DSH_PROFILE" exec node -e "$hel
 if [[ "$autostart" = 1 ]]; then run_helper owner; fi
 say "Installing ds-harness-remote@${REMOTE_VERSION} into profile ${DSH_PROFILE} using ${DSH_COMMAND}"
 "$DSH_COMMAND" plugin --profile "$DSH_PROFILE" add -w "ds-harness-remote@${REMOTE_VERSION}"
+if [[ "$INTELLIGENT_UI" = 1 ]]; then
+  # Same profile as Remote, before any service restart picks up the new bundles.
+  say "Installing deepseek-harness-intelligent-ui@${INTELLIGENT_UI_VERSION} into profile ${DSH_PROFILE}"
+  "$DSH_COMMAND" plugin --profile "$DSH_PROFILE" add -w "deepseek-harness-intelligent-ui@${INTELLIGENT_UI_VERSION}"
+fi
 if [[ -n "$explicit_token" || "$autostart" = 1 ]]; then
   run_helper preflight
   printf '%s' "$registration_token" | run_helper register

@@ -1,8 +1,8 @@
-import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
+import type { ControlResult } from './control-result.js'
 import { CodexRemoteClient } from '@dsh-remote/client-core'
 import type { PluginRouteCallResult } from '@dsh-remote/protocol'
 import type { AcpVirtualWorkspaceView } from './acp/virtual-harness.js'
-import type { HarnessMode } from './api-proxy-switch.js'
+import type { HarnessMode } from './harness-target.js'
 import { probeRemoteHostFeatures } from './client-capabilities.js'
 import type {
   ConnectedRemote,
@@ -56,9 +56,12 @@ export interface ClientControlContext {
 export class ClientControl {
   constructor(private readonly context: ClientControlContext) {}
 
-  async handleControl(endpoint: string, payload: unknown, signal: AbortSignal): Promise<RpcResult<unknown>> {
+  async handleControl(endpoint: string, payload: unknown, signal: AbortSignal): Promise<ControlResult<unknown>> {
     try {
       if (endpoint === 'status') return ok(await this.context.detailedStatus())
+      if (endpoint === 'client.authorization.status') {
+        return ok({ hasCredentials: await this.context.server.hasStoredAuthorization() })
+      }
       if (endpoint === 'devices') return ok(await this.context.devices())
       if (endpoint === 'client.account.providers') return ok(await this.context.server.oauthProviders())
       if (endpoint === 'client.account.login') {

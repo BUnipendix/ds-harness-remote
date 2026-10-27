@@ -99,6 +99,10 @@ export class AgentAcpClient {
     return result.selected as unknown as AcpModelSelection
   }
 
+  async selectPermission(sessionId: string, backend: 'cursor' | 'claude' | 'antigravity' | 'pi' | 'opencode', preset: string, signal?: AbortSignal): Promise<unknown> {
+    return this.call('dsh/selectPermission', { sessionId, backend, preset }, signal)
+  }
+
   async workspaceToolCall(sessionId: string, backend: 'cursor' | 'antigravity' | 'pi' | 'opencode', endpoint: AcpWorkspaceToolCallEndpoint, args: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
     return this.call('dsh/toolCall', { sessionId, backend, endpoint, args }, signal)
   }

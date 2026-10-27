@@ -71,7 +71,7 @@ Desktop defaults to `desktop`; standalone CLI defaults to `web`. Override with `
 Alternatively, open Desktop **Extensions / Plugin management** and install from npm:
 
 ```text
-ds-harness-remote@0.5.18
+ds-harness-remote@0.5.19
 ```
 
 An ordinary standalone CLI cannot manage the reserved `desktop` profile; use Desktop's official launcher.
@@ -84,6 +84,8 @@ An ordinary standalone CLI cannot manage the reserved `desktop` profile; use Des
 | `DSH_PROFILE` | Selected profile; standalone defaults to `web`, Desktop to `desktop` |
 | `DSH_HOME` | Existing value is preserved; registration and runtime share one home, usually root's `.dsh` on Linux |
 | `REMOTE_VERSION` | Remote release, default npm `latest` |
+| `INTELLIGENT_UI` | `1` also installs the Intelligent UI companion into the same profile; default `0` |
+| `INTELLIGENT_UI_VERSION` | Intelligent UI release when `INTELLIGENT_UI=1`, default npm `latest` |
 | `DSH_VERSION` | New Linux DSH installation version, default npm `latest`; does not upgrade an existing DSH |
 | `DSH_REMOTE_REGISTRATION_TOKEN` | One-time Host token; private interactive input is recommended |
 | `DSH_REMOTE_AUTOSTART=0` | Skip Linux service setup/start; root is still required |

@@ -439,6 +439,7 @@ export const harnessCapabilityValues = [
   'harness.remote.v1',
   'harness.remote.v3',
   'harness.remote.transfer.v1',
+  'harness.remote.stream.transfer.v1',
   'fileviewer.read.v1',
   'codex.appserver.v1',
   'codex.appserver.transfer.v1',
@@ -638,6 +639,8 @@ export interface HarnessRemoteStreamOpenParams {
   streamId: string
   endpoint: string
   payload: unknown
+  /** Opt in only after the Host advertises harness.remote.stream.transfer.v1. */
+  transferFrames?: boolean
 }
 
 export interface HarnessRemoteStreamCloseParams {
@@ -648,6 +651,8 @@ export interface HarnessRemoteFrameData {
   streamId: string
   hasValue: true
   value?: unknown
+  /** Mutually exclusive with value; reads reconstruct the complete original frame. */
+  transfer?: Extract<HarnessApiTransferCommitResult, { kind: 'chunked' }>
 }
 
 export interface HarnessRemoteStreamClosedData {

@@ -46,7 +46,7 @@ export class RemoteClientCore {
   private readonly eventHandlers = new Set<(event: EventPayload) => void>()
   private unsubscribeTransport?: () => void
   private unsubscribeClose?: () => void
-  private readonly closeHandlers = new Set<() => void>()
+  private readonly closeHandlers = new Set<(error?: Error) => void>()
   private closeNotified = false
 
   constructor(private readonly transport: RemoteTransport, private readonly timeoutMs = 30_000) {}
@@ -55,7 +55,7 @@ export class RemoteClientCore {
     if (this.unsubscribeTransport !== undefined) return
     this.closeNotified = false
     this.unsubscribeTransport = this.transport.onMessage(data => this.handleMessage(data))
-    this.unsubscribeClose = this.transport.onClose?.(() => this.handleTransportClose())
+    this.unsubscribeClose = this.transport.onClose?.(error => this.handleTransportClose(error))
     try {
       await this.transport.connect()
     } catch (error) {
@@ -120,7 +120,7 @@ export class RemoteClientCore {
     return () => this.eventHandlers.delete(handler)
   }
 
-  onClose(handler: () => void): () => void {
+  onClose(handler: (error?: Error) => void): () => void {
     this.closeHandlers.add(handler)
     return () => this.closeHandlers.delete(handler)
   }
@@ -140,18 +140,18 @@ export class RemoteClientCore {
         `RPC ${pending.method} terminated because the remote client closed`,
       ),
     )
-    this.notifyClose()
+    this.notifyClose(new RemoteClientError('CLIENT_CLOSED', 'The remote client was closed.'))
     await this.transport.close()
   }
 
-  private handleTransportClose(): void {
+  private handleTransportClose(error?: Error): void {
     this.rejectAllPending(
       pending => new RemoteClientError(
         'TRANSPORT_CLOSED',
         `RPC ${pending.method} terminated because the remote transport closed`,
       ),
     )
-    this.notifyClose()
+    this.notifyClose(error)
   }
 
   private handleMessage(data: Uint8Array): void {
@@ -199,10 +199,10 @@ export class RemoteClientCore {
     }
   }
 
-  private notifyClose(): void {
+  private notifyClose(error?: Error): void {
     if (this.closeNotified) return
     this.closeNotified = true
-    for (const handler of this.closeHandlers) handler()
+    for (const handler of this.closeHandlers) handler(error)
   }
 }
 

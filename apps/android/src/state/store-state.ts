@@ -19,6 +19,8 @@ import type {
   RedirectLoginMethod,
   RemoteDevice,
   RemoteSession,
+  ScheduleCatalogEntry,
+  ScheduleDeliveryRecord,
   SendMessageResult,
   ServerConfig,
   SessionModels,
@@ -26,7 +28,7 @@ import type {
   WorkspaceShortcut,
   WorkspaceView,
 } from '../types'
-import type { ThemePreference } from '../ui/theme'
+import type { ThemePreference, TypographyDensity } from '../ui/theme'
 
 type BootPhase = 'loading' | 'ready' | 'error'
 
@@ -88,6 +90,8 @@ export interface AppState {
   historyHasMore: boolean
   historyLoadingOlder: boolean
   oldestLoadedSeq?: number
+  previewImageUri?: string
+  setPreviewImageUri(uri?: string): void
   transportPreference: TransportPreference
   compactHistory: boolean
   setCompactHistory(value: boolean): Promise<void>
@@ -95,9 +99,13 @@ export interface AppState {
   language: AppLanguage
   statusBarVisible: boolean
   themePreference: ThemePreference
+  typographyDensity: TypographyDensity
   defaultPermissionPreset: DefaultPermissionPreset
   pendingOAuthBaseUrl?: string
   pendingOAuthLoginMethod?: RedirectLoginMethod
+  scheduleTasks: ScheduleCatalogEntry[]
+  scheduleLoading: boolean
+  scheduleError?: string
   authPhase: AuthPhase
   refreshing: boolean
   busyAction?: string
@@ -113,6 +121,9 @@ export interface AppState {
   /** True when credentials are invalid and the UI should show the sign-in screen. */
   reauthRequired: boolean
 
+  loadScheduleTasks(): Promise<void>
+  deleteScheduleTask(sessionId: string, id: string): Promise<boolean>
+  loadScheduleHistory(sessionId: string, id: string): Promise<ScheduleDeliveryRecord[]>
   bootstrap(): Promise<void>
   requireReauth(message?: string): Promise<void>
   consumePendingAutoConnect(): string | undefined
@@ -169,6 +180,7 @@ export interface AppState {
   setLanguagePreference(preference: LanguagePreference): Promise<void>
   setStatusBarVisible(visible: boolean): Promise<void>
   setThemePreference(preference: ThemePreference): Promise<void>
+  setTypographyDensity(density: TypographyDensity): Promise<void>
   setDefaultPermissionPreset(preset: DefaultPermissionPreset): Promise<void>
   syncSystemLocales(localeTags: readonly string[]): void
   resetLocalData(): Promise<void>

@@ -103,6 +103,7 @@ export class AcpRemoteGateway {
   private readonly peers = new Map<string, AcpPeerBridge>()
   private readonly sessionOwners = new Map<string, string>()
   private readonly sessionBackends = new Map<string, string>()
+  private readonly sessionPermissions = new Map<string, string>()
   private readonly approvals = new Map<string, PendingApproval>()
   private approvalExpiryTimer?: ReturnType<typeof setTimeout>
   private restartTimer?: ReturnType<typeof setTimeout>
@@ -214,16 +215,16 @@ export class AcpRemoteGateway {
     const bridge = new AcpPeerBridge(this, context, publish, this.logger)
     this.peers.set(context.connectionId, bridge)
     const workspaceBridge = new WorkspaceBridge(async rawId => {
-      const match = rawId.match(/^(acp|cursor|pi|opencode):(.+)$/)
+      const match = rawId.match(/^(acp|cursor|pi|opencode|claude):(.+)$/)
       const session = match ? this.sessionCwds.get(match[2]!) : undefined
-      const backend = match?.[1] === 'acp' ? 'antigravity' : match?.[1] === 'pi' ? 'pi' : match?.[1] === 'opencode' ? 'opencode' : 'cursor'
+      const backend = match?.[1] === 'acp' ? 'antigravity' : match?.[1] === 'pi' ? 'pi' : match?.[1] === 'opencode' ? 'opencode' : match?.[1] === 'claude' ? 'claude' : 'cursor'
       if (!session || session.backend !== backend) throw new RpcError('ACP_WORKSPACE_UNAVAILABLE', 'The ACP session has no trusted workspace.')
       this.requireAcp(backend)
       this.requireSessionOwner(context.connectionId, match![2]!)
       return session.cwd
     }, this.terminalEnabled, this.workspaceState, this.terminalSpawner, {
-      domain: 'ACP', owns: value => typeof value === 'string' && /^(acp|cursor|pi|opencode):/.test(value),
-      parse: value => typeof value === 'string' && /^(acp|cursor|pi|opencode):[A-Za-z0-9_-]{1,240}$/.test(value)
+      domain: 'ACP', owns: value => typeof value === 'string' && /^(acp|cursor|pi|opencode|claude):/.test(value),
+      parse: value => typeof value === 'string' && /^(acp|cursor|pi|opencode|claude):[A-Za-z0-9_-]{1,240}$/.test(value)
         ? { sessionId: value, nativeId: value } : undefined,
     })
     this.workspaceTools.set(context.connectionId, new AcpWorkspaceTools(workspaceBridge,
@@ -463,7 +464,8 @@ export class AcpRemoteGateway {
         // the live session's control ownership.
         const client = this.requireAcp(backend) as CursorAcpLike & { history?: (sessionId: string, cwd: string) => Promise<unknown[]> }
         if (!client.history) throw new RpcError('METHOD_NOT_ALLOWED', 'The ACP backend does not support history.')
-        return { events: await client.history(conversationId, cwd) }
+        const preset = this.sessionPermissions.get(conversationId)
+        return { events: await client.history(conversationId, cwd), ...(preset ? { permissionPreset: preset } : {}) }
       }
       if (backend !== 'antigravity') return { events: [] }
       const events = await loadTranscriptEvents(conversationId, rawSessionId)
@@ -471,7 +473,8 @@ export class AcpRemoteGateway {
         sessionId: shortSessionId(rawSessionId),
         eventCount: events.length,
       })
-      return { events }
+      const preset = this.sessionPermissions.get(conversationId)
+      return { events, ...(preset ? { permissionPreset: preset } : {}) }
     }
 
     if (call.method === 'session/new') {
@@ -570,6 +573,16 @@ export class AcpRemoteGateway {
       assertCurrent()
       this.sessionBackends.set(sessionId!, session.backend)
       return sanitizeSessionResult(result)
+    }
+
+    if (call.method === 'dsh/selectPermission') {
+      this.requireSessionOwner(connectionId, sessionId!)
+      const preset = typeof call.params.preset === 'string' ? call.params.preset : undefined
+      if (preset !== 'workspace-write' && preset !== 'danger-full-access') {
+        throw new RpcError('INVALID_MESSAGE', 'Unknown permission preset.')
+      }
+      this.sessionPermissions.set(sessionId!, preset)
+      return { preset }
     }
 
     // session/prompt blocks until the upstream turn ends. Returning that RPC
@@ -817,7 +830,7 @@ export class AcpRemoteGateway {
     const sessions = new Set([...this.sessionBackends].filter(([, backend]) => changed.has(backend)).map(([id]) => id))
     if (sessions.size > 0) await Promise.all([...this.peers.values()].map(peer => peer.failStreams('failed', sessions)))
     for (const [id, session] of this.sessionCwds) if (changed.has(session.backend)) this.sessionCwds.delete(id)
-    const terminalError = await this.workspaceState.dispose(sessionId => changed.has(sessionId.startsWith('acp:') ? 'antigravity' : sessionId.startsWith('pi:') ? 'pi' : sessionId.startsWith('opencode:') ? 'opencode' : 'cursor'))
+    const terminalError = await this.workspaceState.dispose(sessionId => changed.has(sessionId.startsWith('acp:') ? 'antigravity' : sessionId.startsWith('pi:') ? 'pi' : sessionId.startsWith('opencode:') ? 'opencode' : sessionId.startsWith('claude:') ? 'claude' : 'cursor'))
       .then(() => undefined, () => new RpcError('TERMINAL_CLEANUP_FAILED', 'Some ACP terminal processes could not be stopped. Save the backend settings again to retry.'))
     for (const id of sessions) {
       this.sessionOwners.delete(id)
@@ -982,7 +995,14 @@ export class AcpRemoteGateway {
     }
     let options: PendingApproval['options'] = []
     try {
-      if (message.method === 'session/request_permission') options = permissionOptions(message.params)
+      if (message.method === 'session/request_permission') {
+        options = permissionOptions(message.params)
+        const allowOption = options.find(item => item.kind === 'allow_once')
+        if (this.sessionPermissions.get(sessionId) === 'danger-full-access' && allowOption) {
+          await client.respond(message.id, { outcome: { outcome: 'selected', optionId: allowOption.optionId } })
+          return
+        }
+      }
     } catch {
       await client.respondError(message.id, -32602, 'The ACP permission options are invalid.')
       return

@@ -41,7 +41,7 @@ Server 可见路由与设备/连接元数据，不读取 Relay 业务明文。�
 
 ## 独立业务域
 
-- Harness：`harness.api.*` / `harness.remote.*`，保持官方 ApiProxy / Typert 的请求、事件与权限语义。
+- Harness：`harness.remote.*`，保持官方 Typert 的请求、事件与权限语义。
 - CodeX：`codex.app.*`，App Server 固定 allowlist 和 Project / Thread authority。
 - ACP：`agent.acp.*`，Cursor / AGY 独立 capability；Host 会话/backend 归属，浏览器只消费 Host 接口。
 - File Viewer：`fileviewer.call`，provider 内受限 stat/readRange/list。

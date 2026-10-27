@@ -1,4 +1,7 @@
+import { ChatImageProvider } from '../ui/chat-image'
 import { isSubagentSession } from '../lib/session-kind'
+import * as DocumentPicker from 'expo-document-picker'
+import { File } from 'expo-file-system'
 import * as ImagePicker from 'expo-image-picker'
 import { AnimatedEllipsis } from '../ui/animated-ellipsis'
 import {
@@ -9,6 +12,7 @@ import {
   ChevronDown,
   ChevronRight,
   CircleStop,
+  FileText,
   Folder,
   Images,
   Layers,
@@ -23,6 +27,17 @@ import {
   Users,
   X,
 } from 'lucide-react-native'
+import {
+  type StagedFile,
+  documentImageReadBudget,
+  readDocumentImageBase64,
+  formatUploadedFilesPrompt,
+  formatFileBytes,
+  isTextFile,
+  isValidUtf8Text,
+  MAX_SINGLE_FILE_BYTES,
+  MAX_TOTAL_FILES_BYTES,
+} from './chat-files'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { LayoutChangeEvent, NativeScrollEvent, NativeSyntheticEvent } from 'react-native'
 import {
@@ -34,12 +49,16 @@ import {
   Image,
   Keyboard,
   Modal,
+  PanResponder,
   Pressable,
   ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native'
+import * as Haptics from 'expo-haptics'
+import { shouldConfirmSwipeRightOpen, shouldStartSwipeRightToOpen } from '../lib/gesture-swipe-rules'
 import Svg,{ Path } from 'react-native-svg'
 import { strings as zhCN } from '../locales/i18n'
 import { sessionPermissions } from '../services/session-permissions'
@@ -48,8 +67,15 @@ import type { CustomPrompt } from '../services/storage'
 import { BUILT_IN_PROMPTS, loadCustomPrompts, saveCustomPrompts } from '../services/storage'
 import { hasVisibleMessageText } from '../state/event-reducer'
 import type { ChatSection } from '../state/message-helpers'
-import { chatSections, inboxQueuedItems, inboxRpcIds, mergeReplyReasoning } from '../state/message-helpers'
-import { requireSessionTools, useAppStore } from '../state/store'
+import {
+  chatSections,
+  computeStreamingSignature,
+  inboxQueuedItems,
+  inboxRpcIds,
+  LATEST_EDGE_PX,
+  mergeReplyReasoning,
+} from '../state/message-helpers'
+import { chatImageConnectionGeneration, requireSessionTools, sessionChatImageLoader, useAppStore } from '../state/store'
 import { placeUiArtifacts, projectUiArtifacts, type UiArtifact } from '../state/ui-artifacts'
 import type {
   ChatItem,
@@ -80,7 +106,7 @@ import { useResponsiveLayout } from '../ui/responsive'
 import { spacing } from '../ui/theme'
 import { useTheme } from '../ui/theme-context'
 import { useThemedStyles } from '../ui/use-themed-styles'
-import { promptImageFromAsset, sessionImageLimits, validatePromptImages } from './chat-images'
+import { promptImageFromAsset, promptImageFromBase64, sessionImageLimits, validatePromptImages } from './chat-images'
 import { ChatTrajectory } from './chat-trajectory'
 import { ChatErrorBoundary } from './chat-error-boundary'
 import { ChildAgentPanel, TeamAgentPanel } from './chat/agents'
@@ -113,6 +139,8 @@ import { useLiveSessionStatus } from './device-screens'
 import { SessionInfo } from './chat/session-info'
 import { workspaceStableKey } from '../lib/workspace-key'
 import { HostSessionsDrawer } from './host-sessions-drawer'
+import { AutomationTasksModal } from './automation-tasks-modal'
+import { PluginsModal } from './plugins-modal'
 import { resolveSessionDisplayTitle } from './session-title'
 import { SessionToolsPanel } from './session-tools-panel'
 
@@ -149,13 +177,6 @@ const LONG_DRAFT_HINT = 12_000
 /** Hard cap mirroring the largest backend prompt budget (ACP/CodeX 256 KiB). */
 const LONG_DRAFT_MAX = 256_000
 
-/**
- * Distance from the newest row that still counts as "at the latest message".
- * Follow mode and the jump-to-latest button share this edge, so the button
- * appears exactly when the viewport has left the turn streaming appends to.
- */
-const LATEST_EDGE_PX = 80
-
 export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspaces }: { onBack: () => void; onOpenDevices: () => void; onNewSession?: () => void; onOpenWorkspaces?: (focusWorkspaceKey?: string) => void }) {
   // New subagent children and running-state changes must reach `sessions`
   // without leaving the chat (the list screens unmount here).
@@ -167,6 +188,9 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
   const busy = useAppStore(state => state.busyAction)
   const codexReadySessionId = useAppStore(state => state.codexReadySessionId)
   const connection = useAppStore(state => state.connection)
+  const imageGeneration = chatImageConnectionGeneration()
+  const imageLoader = useMemo(() => session === undefined || connection.phase !== 'connected'
+    ? undefined : sessionChatImageLoader(session), [session?.sessionId, session?.backend, hostId, imageGeneration, connection.phase])
   const historyHasMore = useAppStore(state => state.historyHasMore)
   const historyLoadingOlder = useAppStore(state => state.historyLoadingOlder)
   const sessionModels = useAppStore(state => state.sessionModels)
@@ -191,6 +215,8 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
   const agentPresetOptions = useAppStore(state => state.agentPresetOptions)
   const agentPresetLoading = useAppStore(state => state.agentPresetLoading)
   const agentPresetSelecting = useAppStore(state => state.agentPresetSelecting)
+  const previewImageUri = useAppStore(state => state.previewImageUri)
+  const setPreviewImageUri = useAppStore(state => state.setPreviewImageUri)
   const memoryScope = browseScope(useAppStore.getState())
   const memoryKey = browseKey(memoryScope, session?.sessionId ?? '')
   const draft = useBrowseMemory(state => state.entries[memoryKey]?.draft ?? '')
@@ -201,6 +227,9 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
   const [teamOpen, setTeamOpen] = useState(false)
 
   const [sessionsOpen, setSessionsOpen] = useState(false)
+  const [automationTasksOpen, setAutomationTasksOpen] = useState(false)
+  const [pluginsOpen, setPluginsOpen] = useState(false)
+  const pluginsAvailable = useAppStore(state => state.connection.phase === 'connected')
   const [sessionInfoOpen, setSessionInfoOpen] = useState(false)
 
   // Web-style blue marks: `/` commands and `@` references render in accent blue.
@@ -211,6 +240,20 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
     updateBrowseEntry(memoryScope, session?.sessionId ?? '', {images: typeof value === 'function' ? value(previous) : value})
   }
   const [pickingImages, setPickingImages] = useState(false)
+  const [pickingFiles, setPickingFiles] = useState(false)
+  const [stagedFiles, setStagedFiles] = useState<StagedFile[]>([])
+  const sessionGenerationRef = useRef(0)
+  useLayoutEffect(() => {
+    let lastSessionId = useAppStore.getState().selectedSession?.sessionId
+    return useAppStore.subscribe((state) => {
+      const currentId = state.selectedSession?.sessionId
+      if (currentId !== lastSessionId) {
+        lastSessionId = currentId
+        sessionGenerationRef.current += 1
+        setStagedFiles([])
+      }
+    })
+  }, [])
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [plusMenuOpen, setPlusMenuOpen] = useState(false)
   const [modePickerOpen, setModePickerOpen] = useState(false)
@@ -318,6 +361,8 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
   }, [mentionType, session?.sessionId, session?.backend, connection.phase, skillCatalog, workspaceFileRefs])
   const [reconnectingSession, setReconnectingSession] = useState(false)
   const [newSessionPending, setNewSessionPending] = useState(false)
+  const creatingSessionRef = useRef(false)
+  const lastNewSessionTimeRef = useRef(0)
   const listRef = useRef<FlatList<ChatSection>>(null)
   const lastAutoScrollAt = useRef(0)
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -325,6 +370,9 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
   const listViewportRef = useRef({ width: 0, height: 0 })
   const listContentRef = useRef({ width: 0, height: 0 })
   const userScrollingRef = useRef(false)
+  const hasTrailingScrollRef = useRef(false)
+  const pendingScrollStreakRef = useRef(0)
+  const scrollIntentGenerationRef = useRef(0)
   /** Keep the viewport on the latest turn until the user scrolls away. */
   const pinToBottomRef = useRef(true)
   /** Re-pin while the first session layout (markdown / images) is still settling. */
@@ -477,7 +525,33 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
   }, [tabletSplit])
   const readableColumn = { width: '100%' as const, maxWidth: contentMaxWidth, alignSelf: 'center' as const }
 
+  // Swipe right gesture to open sessions drawer with haptic feedback
+  const edgeSwipeResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => false,
+        onStartShouldSetPanResponderCapture: () => false,
+        onMoveShouldSetPanResponder: (_evt, g) => {
+          if (tabletSplit || sessionsOpen) return false
+          return shouldStartSwipeRightToOpen({ dx: g.dx, dy: g.dy, x0: g.x0 }, trajectory)
+        },
+        onMoveShouldSetPanResponderCapture: () => false,
+        onPanResponderRelease: (_evt, g) => {
+          if (tabletSplit || sessionsOpen) return
+          if (shouldConfirmSwipeRightOpen({ dx: g.dx, dy: g.dy, x0: g.x0, vx: g.vx })) {
+            Keyboard.dismiss()
+            setMentionType(null)
+            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined)
+            setSessionsOpen(true)
+          }
+        },
+      }),
+    [sessionsOpen, tabletSplit, trajectory]
+  )
+
   const cancelPendingScroll = useCallback(() => {
+    hasTrailingScrollRef.current = false
+    pendingScrollStreakRef.current = 0
     if (scrollTimerRef.current !== null) clearTimeout(scrollTimerRef.current)
     if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current)
     scrollTimerRef.current = null
@@ -486,21 +560,51 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
 
   // Follow measured content and viewport changes (including the keyboard).
   // Keep a trailing command so the last streaming measurement is never lost,
-  // while limiting native scrolls to ~10 Hz with no React state updates.
+  // while coalescing high-frequency deltas (~30 Hz) with no React state updates.
   const scheduleScrollToBottom = useCallback(() => {
-    if (scrollTimerRef.current !== null || scrollFrameRef.current !== null) return
-    scrollTimerRef.current = setTimeout(() => {
-      scrollTimerRef.current = null
+    if (!pinToBottomRef.current && !initialPinRef.current) return
+    if (userScrollingRef.current) return
+
+    if (scrollTimerRef.current !== null || scrollFrameRef.current !== null) {
+      hasTrailingScrollRef.current = true
+      return
+    }
+
+    const runScroll = () => {
       scrollFrameRef.current = requestAnimationFrame(() => {
         scrollFrameRef.current = null
         if (!autoScrollAllowedRef.current || userScrollingRef.current
-          || (!pinToBottomRef.current && !initialPinRef.current)) return
+          || (!pinToBottomRef.current && !initialPinRef.current)) {
+          hasTrailingScrollRef.current = false
+          pendingScrollStreakRef.current = 0
+          return
+        }
         lastAutoScrollAt.current = Date.now()
         // Nonanimated commands also keep native momentum callbacks reserved
         // for user flings, so they cannot disable following during a reply.
         listRef.current?.scrollToEnd({ animated: false })
+
+        if (hasTrailingScrollRef.current && pendingScrollStreakRef.current < 2) {
+          hasTrailingScrollRef.current = false
+          pendingScrollStreakRef.current += 1
+          scheduleScrollToBottom()
+        } else {
+          hasTrailingScrollRef.current = false
+          pendingScrollStreakRef.current = 0
+        }
       })
-    }, Math.max(0, 100 - (Date.now() - lastAutoScrollAt.current)))
+    }
+
+    const elapsed = Date.now() - lastAutoScrollAt.current
+    const delay = Math.max(0, 33 - elapsed)
+    if (delay === 0) {
+      runScroll()
+    } else {
+      scrollTimerRef.current = setTimeout(() => {
+        scrollTimerRef.current = null
+        runScroll()
+      }, delay)
+    }
   }, [])
 
   // Following the latest turn is suspended once the user scrolls away, so the
@@ -519,6 +623,7 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
   // re-asserts the end once the rows below finish re-measuring, which a single
   // scroll command cannot guarantee on a virtualized list.
   const jumpToLatest = useCallback(() => {
+    scrollIntentGenerationRef.current++
     cancelPendingScroll()
     userScrollingRef.current = false
     pinToBottomRef.current = true
@@ -538,6 +643,7 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
 
   // Restore reading position before the new list can emit scroll events.
   useLayoutEffect(() => {
+    scrollIntentGenerationRef.current++
     cancelPendingScroll()
     setTrajectory(false)
     savedPosition.current = useBrowseMemory.getState().entries[memoryKey]?.position
@@ -583,13 +689,16 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
     initialPinRef.current = false
   }, [historyLoadingOlder])
 
-  // Scroll when a brand-new item is appended. Streaming deltas keep the same
-  // item id, so this fires once per assistant step instead of once per chunk.
+  // Streaming deltas keep the same item id, but update text length / reasoning.
+  // Compute a cheap signature of the last item so streaming increments trigger auto-scroll.
+  const streamingSignature = useMemo(() => computeStreamingSignature(visibleMessages), [visibleMessages])
+
+  // Scroll when a brand-new item is appended or the last message receives streaming tokens.
   useEffect(() => {
     if (panelOpen || visibleMessages.length === 0 || historyLoadingOlder || sessionId === undefined) return
     if (!pinToBottomRef.current && !initialPinRef.current) return
     scheduleScrollToBottom()
-  }, [visibleMessages.length, historyLoadingOlder, panelOpen, scheduleScrollToBottom, sessionId])
+  }, [streamingSignature, visibleMessages.length, historyLoadingOlder, panelOpen, scheduleScrollToBottom, sessionId])
 
   const onListLayout = useCallback((event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout
@@ -638,12 +747,22 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
     const distanceFromEnd = contentSize.height - layoutMeasurement.height - contentOffset.y
     // Content growth and IME resizing can also emit scroll events. Only a
     // user's drag/fling changes the intent to follow the latest response.
-    if (!userScrollingRef.current || restoringPosition.current) {
+    if (restoringPosition.current) {
       syncLatestTurnIndicator(distanceFromEnd)
       return
     }
     const atBottom = distanceFromEnd <= LATEST_EDGE_PX
-    pinToBottomRef.current = atBottom
+    if (userScrollingRef.current) {
+      if (distanceFromEnd > LATEST_EDGE_PX) {
+        pinToBottomRef.current = false
+        initialPinRef.current = false
+      } else {
+        pinToBottomRef.current = true
+      }
+    } else if (atBottom) {
+      pinToBottomRef.current = true
+      initialPinRef.current = false
+    }
     syncLatestTurnIndicator(distanceFromEnd)
     if (atBottom) setNewContent(false)
     if (session !== undefined && (Date.now() - lastPositionSave.current > 200 || atBottom)) {
@@ -658,10 +777,32 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
     contentBefore.current = {key: memoryKey, version: lastContentVersion}
   }, [lastContentVersion, memoryKey])
 
-  const onListScrollEnd = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+  const onListDragEnd = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    onListScroll(event)
+    const velocityY = Math.abs(event.nativeEvent.velocity?.y ?? 0)
+    if (velocityY <= 0.05) {
+      userScrollingRef.current = false
+      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent
+      const distanceFromEnd = contentSize.height - layoutMeasurement.height - contentOffset.y
+      if (distanceFromEnd <= LATEST_EDGE_PX) {
+        pinToBottomRef.current = true
+        initialPinRef.current = false
+        scheduleScrollToBottom()
+      }
+    }
+  }, [onListScroll, scheduleScrollToBottom])
+
+  const onListMomentumEnd = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     onListScroll(event)
     userScrollingRef.current = false
-  }, [onListScroll])
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent
+    const distanceFromEnd = contentSize.height - layoutMeasurement.height - contentOffset.y
+    if (distanceFromEnd <= LATEST_EDGE_PX) {
+      pinToBottomRef.current = true
+      initialPinRef.current = false
+      scheduleScrollToBottom()
+    }
+  }, [onListScroll, scheduleScrollToBottom])
 
   // Artifact changes must invalidate FlatList cells even when their section is
   // reused (a later turn can patch a card owned by an earlier turn).
@@ -808,24 +949,65 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
     // typed right before the tap, silently dropping the tail of the message.
     const submittedDraft = draftRef.current
     const text = submittedDraft.trim()
-    if (text.length === 0 && images.length === 0) return
-    if (text.length > LONG_DRAFT_MAX) {
+    if (text.length === 0 && images.length === 0 && stagedFiles.length === 0) return
+    const submittedImages = images
+    const submittedFiles = stagedFiles
+    const promptText = submittedFiles.length > 0
+      ? formatUploadedFilesPrompt(text, submittedFiles)
+      : text
+    if (promptText.length > LONG_DRAFT_MAX) {
       Alert.alert(zhCN.chat.draftTooLongTitle, zhCN.chat.draftTooLong(LONG_DRAFT_MAX))
       return
     }
-    const submittedImages = images
     applyDraft('')
     setImages([])
+    setStagedFiles([])
     setMentionType(null)
     selectionRef.current = { start: 0, end: 0 }
     setSelection({ start: 0, end: 0 })
-    const outcome = await sendMessage(text, submittedImages)
+    const targetSessionId = session.sessionId
+    const sendSessionGen = sessionGenerationRef.current
+    const sendGeneration = ++scrollIntentGenerationRef.current
+    const previousPin = pinToBottomRef.current
+    const previousInitialPin = initialPinRef.current
+    const previousAway = awayFromLatestRef.current
+    pinToBottomRef.current = true
+    initialPinRef.current = true
+    pendingScrollStreakRef.current = 0
+    awayFromLatestRef.current = false
+    setAwayFromLatest(false)
+    setNewContent(false)
+    scheduleScrollToBottom()
+    const outcome = await sendMessage(promptText, submittedImages)
     if (outcome === 'rejected') {
+      if (session.sessionId === targetSessionId && scrollIntentGenerationRef.current === sendGeneration) {
+        cancelPendingScroll()
+        pinToBottomRef.current = previousPin
+        initialPinRef.current = previousInitialPin
+        awayFromLatestRef.current = previousAway
+        setAwayFromLatest(previousAway)
+        if (previousPin || previousInitialPin) {
+          scheduleScrollToBottom()
+        }
+      }
       // Nothing was persisted (command failure): restore the draft without
       // clobbering input typed while the send was in flight.
-      const inFlight = useBrowseMemory.getState().entries[memoryKey]?.draft ?? ''
-      setDraft(inFlight.length === 0 ? submittedDraft : `${submittedDraft}\n${inFlight}`)
-      setImages(previous => previous.length === 0 ? submittedImages : [...submittedImages, ...previous])
+      if (sessionGenerationRef.current === sendSessionGen && useAppStore.getState().selectedSession?.sessionId === targetSessionId) {
+        const inFlight = useBrowseMemory.getState().entries[memoryKey]?.draft ?? ''
+        setDraft(inFlight.length === 0 ? submittedDraft : `${submittedDraft}\n${inFlight}`)
+        setImages(previous => previous.length === 0 ? submittedImages : [...submittedImages, ...previous])
+        setStagedFiles(current => {
+          const combined = [...submittedFiles, ...current]
+          let acc = 0
+          return combined.filter(f => {
+            if (acc + f.size <= MAX_TOTAL_FILES_BYTES) {
+              acc += f.size
+              return true
+            }
+            return false
+          })
+        })
+      }
       Alert.alert(zhCN.messageActions.failed, useAppStore.getState().error ?? zhCN.messageActions.unavailable)
     } else if (outcome === 'sent') {
       const result = useAppStore.getState().commandResult
@@ -840,9 +1022,10 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
 
   const pickImages = async () => {
     const limits = sessionImageLimits(session)
-    const remaining = limits === undefined ? 0 : Math.max(0, limits.maxImagesPerMessage - images.length)
-    if (limits !== undefined && remaining === 0) {
-      Alert.alert(zhCN.chat.imageLimitTitle, zhCN.chat.tooManyImages(limits.maxImagesPerMessage))
+    const maxAllowed = limits?.maxImagesPerMessage ?? 4
+    const remaining = Math.max(0, maxAllowed - images.length)
+    if (remaining === 0) {
+      Alert.alert(zhCN.chat.imageLimitTitle, zhCN.chat.tooManyImages(maxAllowed))
       return
     }
     setPickingImages(true)
@@ -874,9 +1057,10 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
 
   const takePhoto = async () => {
     const limits = sessionImageLimits(session)
-    const remaining = limits === undefined ? 0 : Math.max(0, limits.maxImagesPerMessage - images.length)
-    if (limits !== undefined && remaining === 0) {
-      Alert.alert(zhCN.chat.imageLimitTitle, zhCN.chat.tooManyImages(limits.maxImagesPerMessage))
+    const maxAllowed = limits?.maxImagesPerMessage ?? 4
+    const remaining = Math.max(0, maxAllowed - images.length)
+    if (remaining === 0) {
+      Alert.alert(zhCN.chat.imageLimitTitle, zhCN.chat.tooManyImages(maxAllowed))
       return
     }
     setPickingImages(true)
@@ -905,6 +1089,161 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
       Alert.alert(zhCN.chat.imagePickerFailedTitle, zhCN.chat.imagePickerFailedBody)
     } finally {
       setPickingImages(false)
+    }
+  }
+
+  const canAttachImages = sessionImageLimits(session) !== undefined
+    || session.backend === 'antigravity' || session.backend === 'cursor' || session.backend === 'codex'
+
+  const pickFiles = async () => {
+    const targetSessionId = session.sessionId
+    const capturedGen = sessionGenerationRef.current
+    setPickingFiles(true)
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        multiple: true,
+        copyToCacheDirectory: true,
+      })
+      if (result.canceled || !result.assets) return
+
+      if (sessionGenerationRef.current !== capturedGen || useAppStore.getState().selectedSession?.sessionId !== targetSessionId) return
+
+      const newStagedFiles: StagedFile[] = []
+      const newImages: PromptImage[] = []
+      const limits = sessionImageLimits(session)
+      const imageBudget = documentImageReadBudget(limits)
+      const currentImages = useBrowseMemory.getState().entries[memoryKey]?.images ?? EMPTY_IMAGES
+      let stagedImagesCount = currentImages.length
+      let stagedImagesBytes = currentImages.reduce((acc, img) => acc + img.bytes, 0)
+      let stagedTextBytes = stagedFiles.reduce((acc, f) => acc + f.size, 0)
+
+      for (const asset of result.assets) {
+        const name = asset.name ?? 'file'
+        const ext = name.split(/[?#]/, 1)[0]?.split('.').at(-1)?.toLowerCase()
+        const isImage = asset.mimeType?.startsWith('image/') || ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext ?? '')
+
+        if (isImage && !canAttachImages) {
+          Alert.alert(zhCN.chat.imageLimitTitle, zhCN.chat.unsupportedImage(name))
+          continue
+        }
+
+        const fileObj = new File(asset.uri)
+        let realSize = 0
+        try {
+          const statSize = fileObj.size
+          if (typeof statSize === 'number' && Number.isFinite(statSize) && statSize > 0) {
+            realSize = statSize
+          }
+        } catch {
+          realSize = 0
+        }
+
+        if (realSize <= 0) {
+          Alert.alert(zhCN.chat.filePickerFailedTitle, `无法获取 ${name} 的真实磁盘大小。`)
+          continue
+        }
+
+        if (isImage) {
+          const maxAllowed = limits?.maxImagesPerMessage ?? 4
+          if (stagedImagesCount >= maxAllowed) {
+            Alert.alert(zhCN.chat.imageLimitTitle, zhCN.chat.tooManyImages(maxAllowed))
+            continue
+          }
+          if (realSize > imageBudget.maxImageBytes) {
+            Alert.alert(zhCN.chat.imageLimitTitle, zhCN.chat.imageTooLarge(name, formatFileBytes(imageBudget.maxImageBytes)))
+            continue
+          }
+          if (stagedImagesBytes + realSize > imageBudget.maxMessageImageBytes) {
+            Alert.alert(zhCN.chat.imageLimitTitle, zhCN.chat.imagesTooLarge(formatFileBytes(imageBudget.maxMessageImageBytes)))
+            continue
+          }
+          try {
+            const base64 = await readDocumentImageBase64(fileObj, stagedImagesBytes, limits)
+            const imgDim = await imageSize(asset.uri)
+            const image = promptImageFromBase64({
+              uri: asset.uri,
+              base64,
+              ...(asset.mimeType ? { mimeType: asset.mimeType } : {}),
+              name,
+              width: imgDim.width,
+              height: imgDim.height,
+            })
+            newImages.push(image)
+            stagedImagesCount += 1
+            stagedImagesBytes += image.bytes
+          } catch {
+            Alert.alert(zhCN.chat.imagePickerFailedTitle, zhCN.chat.imagePickerFailedBody)
+          }
+        } else if (isTextFile(name, asset.mimeType)) {
+          if (realSize > MAX_SINGLE_FILE_BYTES) {
+            Alert.alert(zhCN.chat.filePickerFailedTitle, `${name} 超过单文件大小上限 (${formatFileBytes(MAX_SINGLE_FILE_BYTES)})`)
+            continue
+          }
+          if (stagedTextBytes + realSize > MAX_TOTAL_FILES_BYTES) {
+            Alert.alert(zhCN.chat.filePickerFailedTitle, `本次选择的文件合计超过上限 (${formatFileBytes(MAX_TOTAL_FILES_BYTES)})，后续文件已停止读取。`)
+            break
+          }
+          try {
+            const textContent = await fileObj.text()
+            if (!isValidUtf8Text(textContent)) {
+              Alert.alert(zhCN.chat.filePickerFailedTitle, `“${name}” 包含非有效 UTF-8 字符或控制字符，已跳过。`)
+              continue
+            }
+            newStagedFiles.push({
+              id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              name,
+              size: realSize,
+              mimeType: asset.mimeType ?? 'text/plain',
+              uri: asset.uri,
+              content: textContent,
+            })
+            stagedTextBytes += realSize
+          } catch {
+            Alert.alert(zhCN.chat.filePickerFailedTitle, `无法读取 ${name}，请确保为有效的 UTF-8 文本文件。`)
+          }
+        } else {
+          Alert.alert(zhCN.chat.filePickerFailedTitle, `暂不支持二进制文件 “${name}”，请选择代码或文本文件。`)
+        }
+      }
+
+      if (sessionGenerationRef.current !== capturedGen || useAppStore.getState().selectedSession?.sessionId !== targetSessionId) return
+
+      if (newImages.length > 0) {
+        setImages(current => {
+          const nextImages = [...current, ...newImages]
+          const problem = validatePromptImages(nextImages, limits)
+          if (problem !== undefined) {
+            Alert.alert(zhCN.chat.imageLimitTitle, problem)
+            return current
+          }
+          return nextImages
+        })
+      }
+
+      if (newStagedFiles.length > 0) {
+        setStagedFiles(current => {
+          let currentBytes = current.reduce((acc, f) => acc + f.size, 0)
+          const accepted: StagedFile[] = []
+          let exceeded = false
+          for (const file of newStagedFiles) {
+            if (currentBytes + file.size <= MAX_TOTAL_FILES_BYTES) {
+              currentBytes += file.size
+              accepted.push(file)
+            } else {
+              exceeded = true
+            }
+          }
+          if (exceeded) {
+            Alert.alert(zhCN.chat.filePickerFailedTitle, `部分文件超过总附件上限 (${formatFileBytes(MAX_TOTAL_FILES_BYTES)})，未能添加。`)
+          }
+          return [...current, ...accepted]
+        })
+      }
+    } catch {
+      Alert.alert(zhCN.chat.filePickerFailedTitle, zhCN.chat.filePickerFailedBody)
+    } finally {
+      setPickingFiles(false)
     }
   }
 
@@ -1006,8 +1345,23 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
     setToolsMode(mode)
   }
 
+  const sessionBlank = visibleMessages.length === 0 && session.blank !== false
+
   const startNewSession = async () => {
-    if (newSessionPending || busy !== undefined) return
+    const now = Date.now()
+    if (now - lastNewSessionTimeRef.current < 800) return
+    if (creatingSessionRef.current || newSessionPending || busy !== undefined) return
+
+    if (sessionBlank) {
+      Keyboard.dismiss()
+      setMentionType(null)
+      applyDraft('')
+      setImages([])
+      return
+    }
+
+    creatingSessionRef.current = true
+    lastNewSessionTimeRef.current = now
     setNewSessionPending(true)
     try {
       const created = await createSession(currentWorkspace?.workspaceId)
@@ -1017,6 +1371,7 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
         Alert.alert(zhCN.chat.newChatFailedTitle, zhCN.chat.newChatFailedBody)
       }
     } finally {
+      creatingSessionRef.current = false
       setNewSessionPending(false)
     }
   }
@@ -1073,8 +1428,6 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
     const current = customPrompts ?? BUILT_IN_PROMPTS
     await persistPrompts(current.filter(item => item.id !== prompt.id))
   }
-
-  const sessionBlank = visibleMessages.length === 0 && session.blank !== false
 
   const moveSessionToWorkspace = async (workspace: WorkspaceView) => {
     const previousId = session.sessionId
@@ -1225,7 +1578,12 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
         title={sessionTitle(session)}
         onTitlePress={() => { Keyboard.dismiss(); setMentionType(null); setSessionInfoOpen(true) }}
         titleLines={1}
-        onBack={tabletSplit ? undefined : trajectory ? handleBack : () => { Keyboard.dismiss(); setMentionType(null); setSessionsOpen(true) }}
+        onBack={tabletSplit ? undefined : trajectory ? handleBack : () => {
+          Keyboard.dismiss()
+          setMentionType(null)
+          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined)
+          setSessionsOpen(true)
+        }}
         backIcon={trajectory ? ArrowLeft : Menu}
         backLabel={trajectory ? zhCN.common.back : zhCN.chat.openHostSessions}
         action={<>
@@ -1257,21 +1615,28 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
       )}
     </>
   return (
-    <MarkdownLinkProvider onLinkPress={openFileLink}><KeyboardInset>
+    <ChatImageProvider value={imageLoader}><MarkdownLinkProvider onLinkPress={openFileLink}><KeyboardInset>
       {memoryError !== undefined && <Text accessibilityRole="alert" style={{color: colors.danger, padding: 8}}>{memoryError}</Text>}
       <View style={[styles.splitRoot, tabletSplit && styles.splitRootWide]}>
         {tabletSplit && (
           <View style={styles.splitSidebar}>
             <HostSessionsDrawer
               inline
+              onOpenWorkspaces={() => {
+                Keyboard.dismiss()
+                if (onOpenWorkspaces) onOpenWorkspaces()
+                else onBack()
+              }}
               onBack={onBack}
               backLabel={zhCN.chat.backToWorkspaces}
               onClose={() => Keyboard.dismiss()}
               onSelect={async next => { await openSession(next) }}
+              onOpenAutomationTasks={() => setAutomationTasksOpen(true)}
+              onOpenPlugins={pluginsAvailable ? () => setPluginsOpen(true) : undefined}
             />
           </View>
         )}
-        <View style={styles.splitMain}>
+        <View style={styles.splitMain} {...edgeSwipeResponder.panHandlers}>
       {/* Messages scroll beneath the frosted header; the trajectory view keeps its own fixed search bar below it. */}
       <BlurHeaderFrame header={header} inset={trajectory}>{headerHeight => <ChatErrorBoundary key={session.sessionId} resetKey={session.sessionId}>{trajectory ? <ChatTrajectory key={session.sessionId} items={messages} renderImages={images => <ChatImages images={images} />} hasMore={historyHasMore} loading={historyLoadingOlder} loadOlder={() => void loadOlderHistory()} renderItem={item => <ChatItemView item={item} compact={false} busyAction={busy} onApproval={respondApproval} onQuestion={respondQuestion} />} /> : <>
         <FlatList
@@ -1299,15 +1664,17 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
           maintainVisibleContentPosition={{minIndexForVisible: 0}}
           scrollEventThrottle={16}
           onScrollBeginDrag={() => {
+            scrollIntentGenerationRef.current++
             cancelPendingScroll()
             userScrollingRef.current = true
-            pinToBottomRef.current = false
-            initialPinRef.current = false
             Keyboard.dismiss()
           }}
-          onScrollEndDrag={onListScrollEnd}
-          onMomentumScrollBegin={() => { userScrollingRef.current = true }}
-          onMomentumScrollEnd={onListScrollEnd}
+          onScrollEndDrag={onListDragEnd}
+          onMomentumScrollBegin={() => {
+            cancelPendingScroll()
+            userScrollingRef.current = true
+          }}
+          onMomentumScrollEnd={onListMomentumEnd}
           ListEmptyComponent={busy === `session:${session.sessionId}`
             ? <View style={{ padding: spacing.xl }}><ActivityIndicator size="large" color={colors.primary} /></View>
             : <WelcomeMessage />}
@@ -1368,6 +1735,28 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
                   style={styles.removeImageButton}
                 >
                   <X size={13} color={colors.white} />
+                </Pressable>
+              </View>
+            ))}
+          </ScrollView>
+        )}
+        {stagedFiles.length > 0 && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="always" contentContainerStyle={styles.fileTray}>
+            {stagedFiles.map((file, index) => (
+              <View key={`${file.id}:${index}`} style={styles.fileCard}>
+                <FileText size={16} color={colors.primary} />
+                <View style={styles.fileCardMeta}>
+                  <Text style={styles.fileCardName} numberOfLines={1}>{file.name}</Text>
+                  <Text style={styles.fileCardSize}>{formatFileBytes(file.size)}</Text>
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={file.name ? `移除文件“${file.name}”` : '移除文件'}
+                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                  onPress={() => setStagedFiles(current => current.filter((_, fileIndex) => fileIndex !== index))}
+                  style={styles.removeFileButton}
+                >
+                  <X size={13} color={colors.muted} />
                 </Pressable>
               </View>
             ))}
@@ -1453,7 +1842,7 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
                 {modelSelecting ? <ActivityIndicator size="small" color={colors.muted} /> : <ChevronDown size={14} color={colors.muted} />}
               </Pressable>
             )}
-            {canStop && draft.trim().length === 0 && images.length === 0
+            {canStop && draft.trim().length === 0 && images.length === 0 && stagedFiles.length === 0
               ? <Pressable
                   accessibilityRole="button"
                   accessibilityLabel={zhCN.chat.stop}
@@ -1488,10 +1877,10 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel={zhCN.chat.send}
-                  accessibilityState={{ disabled: !sendReady || permissionSelecting || (draft.trim().length === 0 && images.length === 0) }}
-                  disabled={!sendReady || permissionSelecting || (draft.trim().length === 0 && images.length === 0)}
+                  accessibilityState={{ disabled: !sendReady || permissionSelecting || (draft.trim().length === 0 && images.length === 0 && stagedFiles.length === 0) }}
+                  disabled={!sendReady || permissionSelecting || (draft.trim().length === 0 && images.length === 0 && stagedFiles.length === 0)}
                   onPress={() => void submit()}
-                  style={({ pressed }) => [styles.sendButton, pressed && styles.sendPressed, (!sendReady || permissionSelecting || (draft.trim().length === 0 && images.length === 0)) && styles.sendDisabled]}
+                  style={({ pressed }) => [styles.sendButton, pressed && styles.sendPressed, (!sendReady || permissionSelecting || (draft.trim().length === 0 && images.length === 0 && stagedFiles.length === 0)) && styles.sendDisabled]}
                 >
                   <ArrowUp size={20} color={colors.white} />
                 </Pressable>
@@ -1528,32 +1917,45 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
               keyboardShouldPersistTaps="handled"
               nestedScrollEnabled
             >
-            {sessionImageLimits(session) !== undefined && (
-              <View style={styles.plusCardRow}>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={zhCN.chat.takePhoto}
-                  accessibilityState={{ disabled: pickingImages }}
-                  disabled={pickingImages}
-                  onPress={() => { closePlusMenu(); void takePhoto() }}
-                  style={({ pressed }) => [styles.plusCard, pressed && styles.plusMenuOptionPressed, pickingImages && styles.plusMenuOptionDisabled]}
-                >
-                  <Camera size={22} color={colors.primary} />
-                  <Text style={styles.plusCardText}>{zhCN.chat.takePhoto}</Text>
-                </Pressable>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={zhCN.chat.photos}
-                  accessibilityState={{ disabled: pickingImages }}
-                  disabled={pickingImages}
-                  onPress={() => { closePlusMenu(); void pickImages() }}
-                  style={({ pressed }) => [styles.plusCard, pressed && styles.plusMenuOptionPressed, pickingImages && styles.plusMenuOptionDisabled]}
-                >
-                  <Images size={22} color={colors.primary} />
-                  <Text style={styles.plusCardText}>{zhCN.chat.photos}</Text>
-                </Pressable>
-              </View>
-            )}
+            <View style={styles.plusCardRow}>
+              {canAttachImages && (
+                <>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={zhCN.chat.takePhoto}
+                    accessibilityState={{ disabled: pickingImages || pickingFiles }}
+                    disabled={pickingImages || pickingFiles}
+                    onPress={() => { closePlusMenu(); void takePhoto() }}
+                    style={({ pressed }) => [styles.plusCard, pressed && styles.plusMenuOptionPressed, (pickingImages || pickingFiles) && styles.plusMenuOptionDisabled]}
+                  >
+                    <Camera size={22} color={colors.primary} />
+                    <Text style={styles.plusCardText}>{zhCN.chat.takePhoto}</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={zhCN.chat.photos}
+                    accessibilityState={{ disabled: pickingImages || pickingFiles }}
+                    disabled={pickingImages || pickingFiles}
+                    onPress={() => { closePlusMenu(); void pickImages() }}
+                    style={({ pressed }) => [styles.plusCard, pressed && styles.plusMenuOptionPressed, (pickingImages || pickingFiles) && styles.plusMenuOptionDisabled]}
+                  >
+                    <Images size={22} color={colors.primary} />
+                    <Text style={styles.plusCardText}>{zhCN.chat.photos}</Text>
+                  </Pressable>
+                </>
+              )}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={zhCN.chat.files}
+                accessibilityState={{ disabled: pickingImages || pickingFiles }}
+                disabled={pickingImages || pickingFiles}
+                onPress={() => { closePlusMenu(); void pickFiles() }}
+                style={({ pressed }) => [styles.plusCard, pressed && styles.plusMenuOptionPressed, (pickingImages || pickingFiles) && styles.plusMenuOptionDisabled]}
+              >
+                <FileText size={22} color={colors.primary} />
+                <Text style={styles.plusCardText}>{zhCN.chat.files}</Text>
+              </Pressable>
+            </View>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={zhCN.chat.openWorkspaces}
@@ -1655,12 +2057,26 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
         }}
       />}
       {sessionsOpen && !tabletSplit && <HostSessionsDrawer
+        onOpenWorkspaces={() => {
+          Keyboard.dismiss()
+          setSessionsOpen(false)
+          if (onOpenWorkspaces) onOpenWorkspaces()
+          else onBack()
+        }}
         onBack={() => {
           Keyboard.dismiss()
           setSessionsOpen(false)
           onOpenDevices()
         }}
         onClose={() => setSessionsOpen(false)}
+        onOpenAutomationTasks={() => {
+          setSessionsOpen(false)
+          setAutomationTasksOpen(true)
+        }}
+        onOpenPlugins={pluginsAvailable ? () => {
+          setSessionsOpen(false)
+          setPluginsOpen(true)
+        } : undefined}
         onSelect={async next => {
           const pending = openSession(next)
           const visible = useAppStore.getState().selectedSession?.sessionId === next.sessionId
@@ -1704,7 +2120,47 @@ export function ChatScreen({ onBack, onOpenDevices, onNewSession, onOpenWorkspac
         onClose={() => setPromptEditing(null)}
         onSave={(title, text) => void savePromptEdit(title, text)}
       />
-    </KeyboardInset></MarkdownLinkProvider>
+      <Modal
+        visible={previewImageUri !== undefined}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPreviewImageUri(undefined)}
+        statusBarTranslucent
+      >
+        <View style={styles.lightboxBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setPreviewImageUri(undefined)} />
+          {previewImageUri !== undefined && (
+            <Image
+              source={{ uri: previewImageUri }}
+              style={styles.lightboxImage}
+              resizeMode="contain"
+            />
+          )}
+          <Pressable
+            style={styles.lightboxClose}
+            onPress={() => setPreviewImageUri(undefined)}
+            accessibilityRole="button"
+            accessibilityLabel={zhCN.common.close}
+            hitSlop={12}
+          >
+            <X size={24} color="#ffffff" />
+          </Pressable>
+        </View>
+      </Modal>
+      <PluginsModal visible={pluginsOpen} onClose={() => setPluginsOpen(false)} />
+      <AutomationTasksModal
+        visible={automationTasksOpen}
+        onClose={() => setAutomationTasksOpen(false)}
+        onOpenSession={async targetSession => {
+          setAutomationTasksOpen(false)
+          await openSession(targetSession)
+        }}
+        onNewTask={async () => {
+          setAutomationTasksOpen(false)
+          await createSession(currentWorkspace?.workspaceId)
+        }}
+      />
+    </KeyboardInset></MarkdownLinkProvider></ChatImageProvider>
   )
 }
 

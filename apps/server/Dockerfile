@@ -17,11 +17,14 @@ RUN pnpm --filter @dsh-remote/protocol build \
     && pnpm --filter @dsh-remote/server deploy --prod /out
 
 # Install the compiled workspace package explicitly: runtime must not depend on
-# a deploy/store snapshot taken before protocol was built.
+# a deploy/store snapshot taken before protocol was built. Normalize published
+# files too: COPY/cp preserve source modes, including root-readable mode 000
+# files that would otherwise become unreadable after switching to USER node.
 RUN rm -rf /out/node_modules/@dsh-remote/protocol \
     && mkdir -p /out/node_modules/@dsh-remote/protocol \
     && cp packages/protocol/package.json /out/node_modules/@dsh-remote/protocol/ \
-    && cp -R packages/protocol/dist /out/node_modules/@dsh-remote/protocol/dist
+    && cp -R packages/protocol/dist /out/node_modules/@dsh-remote/protocol/dist \
+    && chmod -R a+rX /out
 
 FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production \

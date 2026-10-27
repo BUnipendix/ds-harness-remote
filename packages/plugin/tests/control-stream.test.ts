@@ -2,7 +2,7 @@ import { runScenarios } from '../../../scripts/test-scenarios.mjs'
 import { createServer, type Server } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
+import type { ControlResult } from '../src/control-result.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CONTROL_RPC_PREFIX,
@@ -206,7 +206,7 @@ describe('loopback status event stream', () => {
 
   it('serves the stream over the registered loopback route and keeps the RPC path intact', async () => {
     const calls: string[] = []
-    const handler: ControlRouteHandler = async (endpoint, payload): Promise<RpcResult<unknown>> => {
+    const handler: ControlRouteHandler = async (endpoint, payload): Promise<ControlResult<unknown>> => {
       calls.push(`${endpoint}:${JSON.stringify(payload)}`)
       return { ok: true, value: { mode: 'local' } }
     }

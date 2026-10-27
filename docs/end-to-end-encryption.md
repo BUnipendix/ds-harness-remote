@@ -80,8 +80,9 @@ Client                    Server                         Host
 
 Noise transport plaintext 承载 Remote RPC/Event envelope，以及 envelope 内的官方 Harness 数据面：
 
-- rc.2 的官方 `ApiProxy` call、respond、mux/host stream；
-- v0.1.2 alpha.1–rc.1 与 v0.1.5 rc.1 / v0.1.6 alpha.1 Session V3 的官方 Typert Remote call、stream 与 event carrier；
+- 官方 Typert Remote call、stream 与 event carrier，当前兼容范围见[兼容说明](compatibility.zh.md)；Host、随包 Client 和 Android 已移除 rc.2 ApiProxy，独立 VS Code 保留的历史路径不能用于推断当前 Host 支持；
+- CodeX / ACP 独立领域 RPC、事件和有界 transfer；
+- 独立 `workspace.upload.v1` 的有界文件上传；
 - Prompt、回复、问题与 permission 响应；
 - Workspace、Session、模型与设置操作的数据；
 - 图片 Prompt 的有界分块；

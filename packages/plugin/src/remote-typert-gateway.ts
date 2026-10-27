@@ -27,6 +27,7 @@ const WELCOME_NOTICE_VERSION = '2026-08-13.1'
 
 /** Client-side alpha Gateway carrier over the authenticated Remote channel. */
 export class RemoteTypertGateway implements RemoteTypertGatewayTarget {
+  private frameTransfers?: boolean
   constructor(
     private readonly client: RemoteClientCore,
     private readonly compatibility?: SessionFormatCompatibility,
@@ -98,23 +99,42 @@ export class RemoteTypertGateway implements RemoteTypertGatewayTarget {
   }
 
   async open(endpoint: string, payload: unknown, signal: AbortSignal): Promise<AsyncIterable<unknown>> {
+    if (this.frameTransfers === undefined) {
+      const description = await this.client.rpc<unknown>('harness.transport.describe', {}, signal)
+      this.frameTransfers = isRecord(description) && Array.isArray(description.capabilities)
+        && description.capabilities.includes('harness.remote.stream.transfer.v1')
+    }
+    signal.throwIfAborted()
     const streamId = uuidV7()
     const queue = new AsyncValueQueue()
+    const lifetime = new AbortController()
+    const transferSignal = AbortSignal.any([signal, lifetime.signal])
     const unsubscribe = this.client.onEvent(event => routeStreamEvent(event, streamId, queue))
     const unsubscribeClose = this.client.onClose(() => {
+      lifetime.abort()
       queue.fail(new RemoteClientError('TRANSPORT_CLOSED', 'The remote Harness stream transport closed.'))
     })
-    const onAbort = () => queue.close()
+    const onAbort = () => {
+      lifetime.abort()
+      queue.close()
+      unsubscribe()
+      unsubscribeClose()
+      void this.client.rpc('harness.remote.stream.close', { streamId }, undefined, { timeoutMs: 5000 }).catch(() => undefined)
+    }
     signal.addEventListener('abort', onAbort, { once: true })
     try {
-      await this.client.rpc('harness.remote.stream.open', { streamId, endpoint, payload }, signal)
+      await this.client.rpc('harness.remote.stream.open', {
+        streamId, endpoint, payload, ...(this.frameTransfers ? { transferFrames: true } : {}),
+      }, signal)
     } catch (error) {
       signal.removeEventListener('abort', onAbort)
       unsubscribe()
       unsubscribeClose()
+      lifetime.abort()
+      void this.client.rpc('harness.remote.stream.close', { streamId }).catch(() => undefined)
       throw error
     }
-    return this.iterate(streamId, endpoint, queue, unsubscribe, unsubscribeClose, signal, onAbort)
+    return this.iterate(streamId, endpoint, queue, unsubscribe, unsubscribeClose, signal, onAbort, lifetime, transferSignal)
   }
 
   private async *iterate(
@@ -125,14 +145,35 @@ export class RemoteTypertGateway implements RemoteTypertGatewayTarget {
     unsubscribeClose: () => void,
     signal: AbortSignal,
     onAbort: () => void,
+    lifetime: AbortController,
+    transferSignal: AbortSignal,
   ): AsyncGenerator<unknown> {
     try {
-      for await (const value of queue) {
+      for await (const item of queue) {
+        let frame = item as HarnessRemoteFrameData
+        if (frame.transfer !== undefined) {
+          if (!this.frameTransfers || Object.hasOwn(frame, 'value')) throw new Error('Unnegotiated or ambiguous Harness Remote stream transfer')
+          const descriptor = frame.transfer
+          try {
+            const decoded = await this.readTransferred(descriptor, transferSignal)
+            if (!isRecord(decoded) || decoded.streamId !== streamId || decoded.hasValue !== true || Object.hasOwn(decoded, 'transfer')) {
+              throw new Error('Invalid Harness Remote transferred stream frame')
+            }
+            frame = decoded as unknown as HarnessRemoteFrameData
+          } finally {
+            if (typeof descriptor.transferId === 'string') {
+              await this.client.rpc('harness.remote.transfer.close', { transferId: descriptor.transferId }, undefined, { timeoutMs: 5000 }).catch(() => undefined)
+            }
+          }
+        }
+        transferSignal.throwIfAborted()
+        const value = frame.value
         yield this.compatibility === 'legacy-to-v3'
           ? normalizeLegacySessionGatewayValue(endpoint, value)
           : normalizeAssistantMessageStreamValue(endpoint, value)
       }
     } finally {
+      lifetime.abort()
       signal.removeEventListener('abort', onAbort)
       unsubscribe()
       unsubscribeClose()
@@ -170,35 +211,45 @@ export class RemoteTypertGateway implements RemoteTypertGatewayTarget {
         signal,
       )
       if (committed.kind === 'inline') return committed.response
-      if (committed.transferId !== transferId
-        || committed.totalBytes <= 0
-        || committed.totalBytes > MAX_HARNESS_API_TRANSFER_BYTES
-        || committed.totalChunks !== Math.ceil(committed.totalBytes / HARNESS_API_TRANSFER_CHUNK_BYTES)) {
+      if (committed.transferId !== transferId) {
         throw new Error('The remote Host returned an invalid Harness Remote transfer descriptor.')
       }
-      const responseBytes = new Uint8Array(committed.totalBytes)
-      let offset = 0
-      for (let index = 0; index < committed.totalChunks; index += 1) {
-        const result = await this.client.rpc<HarnessApiTransferReadResult>(
-          'harness.remote.transfer.read',
-          { transferId, index },
-          signal,
-        )
-        if (result.transferId !== transferId || result.index !== index) {
-          throw new Error('The remote Host returned an out-of-order Harness Remote transfer chunk.')
-        }
-        const chunk = base64ToBytes(result.data)
-        const expectedBytes = Math.min(HARNESS_API_TRANSFER_CHUNK_BYTES, committed.totalBytes - offset)
-        if (chunk.byteLength !== expectedBytes) {
-          throw new Error('The remote Host returned an invalid Harness Remote transfer chunk.')
-        }
-        responseBytes.set(chunk, offset)
-        offset += chunk.byteLength
-      }
-      return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(responseBytes)) as unknown
+      return await this.readTransferred(committed, signal)
     } finally {
       if (opened) await this.client.rpc('harness.remote.transfer.close', { transferId }).catch(() => undefined)
     }
+  }
+
+  private async readTransferred(committed: Extract<HarnessApiTransferCommitResult, { kind: 'chunked' }>, signal: AbortSignal): Promise<unknown> {
+    if (committed.kind !== 'chunked' || typeof committed.transferId !== 'string'
+      || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(committed.transferId)
+      || !Number.isSafeInteger(committed.totalBytes) || committed.totalBytes <= 0
+      || committed.totalBytes > MAX_HARNESS_API_TRANSFER_BYTES
+      || committed.totalChunks !== Math.ceil(committed.totalBytes / HARNESS_API_TRANSFER_CHUNK_BYTES)) {
+      throw new Error('The remote Host returned an invalid Harness Remote transfer descriptor.')
+    }
+    signal.throwIfAborted()
+    const { transferId } = committed
+    const responseBytes = new Uint8Array(committed.totalBytes)
+    let offset = 0
+    for (let index = 0; index < committed.totalChunks; index += 1) {
+      const result = await this.client.rpc<HarnessApiTransferReadResult>(
+        'harness.remote.transfer.read',
+        { transferId, index },
+        signal,
+      )
+      if (result.transferId !== transferId || result.index !== index) {
+        throw new Error('The remote Host returned an out-of-order Harness Remote transfer chunk.')
+      }
+      const chunk = base64ToBytes(result.data)
+      const expectedBytes = Math.min(HARNESS_API_TRANSFER_CHUNK_BYTES, committed.totalBytes - offset)
+      if (chunk.byteLength !== expectedBytes) {
+        throw new Error('The remote Host returned an invalid Harness Remote transfer chunk.')
+      }
+      responseBytes.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(responseBytes)) as unknown
   }
 }
 
@@ -260,7 +311,7 @@ class AsyncValueQueue implements AsyncIterable<unknown> {
 function routeStreamEvent(event: EventPayload, streamId: string, queue: AsyncValueQueue): void {
   if (event.event === 'harness.remote.frame') {
     const data = event.data as Partial<HarnessRemoteFrameData>
-    if (data.streamId === streamId && data.hasValue === true) queue.push(data.value)
+    if (data.streamId === streamId && data.hasValue === true) queue.push(data)
     return
   }
   if (event.event !== 'harness.remote.stream.closed') return

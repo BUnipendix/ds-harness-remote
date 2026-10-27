@@ -70,7 +70,6 @@ export interface FollowState {
   pendingToolImages: JsonRecord[]
   requestId?: string
   activeTurnId?: string
-  rcOnly?: boolean
   close?: () => Promise<void>
 }
 
@@ -151,11 +150,6 @@ export function carrierArgs(payload: unknown): JsonRecord {
 
 export function requestArg(args: JsonRecord): JsonRecord {
   return record(args.request ?? args._request ?? args)
-}
-
-export function rcEndpoint(endpoint: string): string {
-  if (endpoint === 'workspace.list') return 'workspace/list'
-  return endpoint.replace('.', '/')
 }
 
 export function success<T>(value: T): { ok: true; value: T } {

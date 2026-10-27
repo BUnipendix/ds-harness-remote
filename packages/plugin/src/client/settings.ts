@@ -15,6 +15,7 @@ export function createRemotePluginOptions(React: ClientReact) {
   function RemotePluginOptions(props: {
     control: <T>(endpoint: string, payload?: unknown) => Promise<T>
     statusFeed: StatusFeed<RemoteStatus>
+    onSignIn: () => void
     t: Translate
     view?: 'summary' | 'page'
   }): unknown {
@@ -453,7 +454,12 @@ export function createRemotePluginOptions(React: ClientReact) {
                 React.createElement('p', null, t('serverUrlHint'))),
               developmentSetting,
               acpSetting,
-              React.createElement('p', { className: 'dshRemoteSettingsState' }, t('authorizeFromRemote')),
+              React.createElement('div', { className: 'dshRemoteSettingsSignIn' },
+                React.createElement('p', { className: 'dshRemoteSettingsState' }, t(serverDirty ? 'saveServerBeforeSignIn' : 'authorizeFromRemote')),
+                React.createElement('button', {
+                  type: 'button', className: 'dshRemoteSave', disabled: busy || !loaded || serverDirty,
+                  onClick: props.onSignIn,
+                }, t('signInAccount'))),
               !writable ? React.createElement('p', { className: 'dshRemoteError' }, t('readOnly')) : null,
               React.createElement('div', { className: 'dshRemoteSettingsFooter' },
                 React.createElement('p', {

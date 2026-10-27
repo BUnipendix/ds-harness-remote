@@ -40,7 +40,7 @@ export interface TypertGatewayWireStreamLike {
   failure(error: unknown): { code: string; message: string; details: Record<string, unknown> }
 }
 
-/** Public Gateway face shared by Harness rc.2 and alpha releases. */
+/** Public Gateway face shared by supported Harness Typert releases. */
 export interface TypertGatewayLike {
   invoke(request: TypertGatewayRequest): Promise<unknown>
   stream?(request: TypertGatewayRequest): Promise<AsyncIterable<unknown>>

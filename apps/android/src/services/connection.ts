@@ -3,14 +3,13 @@ import { AdaptiveTransport, type AdaptiveConnectionDetails, type RtcIceServer } 
 import { websocketUrl } from '../lib/server-url'
 import { strings } from '../locales/i18n'
 import type { DeviceIdentity, MuxStreamFrame, RemoteDevice } from '../types'
-import { RemoteApiProxy } from './api-proxy'
 import { AcpSessionTools, HarnessSessionTools, type SessionTools } from './session-tools'
 import { SecureTransport } from './secure-transport'
 import { BotRemoteClient } from './bot-catalog'
 
 export type MuxFrameHandler = (frame: MuxStreamFrame) => void
 export type CloseHandler = (options?: { retryable: boolean }) => void
-type RemoteHarnessClient = RemoteApiProxy | HarnessAlphaClient
+type RemoteHarnessClient = HarnessAlphaClient
 
 export interface AndroidConnectionOptions {
   onOpencodeArchived?: (sessionId: string) => void
@@ -103,7 +102,7 @@ export class AndroidRemoteConnection {
     const connectCore = async (relayOnly: boolean) => {
       const transport = createTransport(relayOnly)
       this.transport = transport
-      // Host-side ApiProxy calls are capped at 30s. Leave a small delivery
+      // Host-side Typert calls are capped at 30s. Leave a small delivery
       // margin, then treat silence as an unhealthy business channel.
       const core = new RemoteClientCore(
         new SecureTransport(transport, identity, host, options.onSecureHandshake),
@@ -179,15 +178,6 @@ export class AndroidRemoteConnection {
         alpha.start()
         this.proxy = alpha
         this.closeMux = async (notifyRemote = true) => { await alpha.close(notifyRemote) }
-      } else if (features.apiProxy) {
-        const apiProxy = new RemoteApiProxy(core)
-        this.proxy = apiProxy
-        const closeMux = await apiProxy.openMuxStream(emitFrame)
-        if (attempt !== this.connectionAttempt || this.core !== core) {
-          await closeMux(false).catch(() => undefined)
-          throw new Error('The connection attempt was superseded.')
-        }
-        this.closeMux = closeMux
       } else {
         throw new Error('The remote Host exposes no supported Harness transport.')
       }
@@ -225,6 +215,23 @@ export class AndroidRemoteConnection {
   requireProxy(): RemoteHarnessClient {
     if (this.proxy === undefined) throw new Error(strings.runtime.connectHostFirst)
     return this.proxy
+  }
+
+  /** Read an existing session reference through its native carrier; never accept a filesystem path. */
+  async readSessionImageAttachment(sessionId: string, attachmentId: string, signal: AbortSignal): Promise<unknown> {
+    const core = this.core
+    const proxy = this.requireProxy()
+    if (core === undefined) throw new Error(strings.runtime.connectHostFirst)
+    const value = await new RemoteTypertGateway(core).call<unknown>('session/attachment', {
+      args: { request: { sessionId, attachmentId } },
+    }, signal, { maxResponseBytes: 12 * 1024 * 1024 })
+    if (this.core !== core || this.proxy !== proxy || signal.aborted) throw new Error(strings.runtime.connectHostFirst)
+    // Typert versions may preserve the official business Result inside the carrier result.
+    if (typeof value === 'object' && value !== null && 'ok' in value) {
+      if (value.ok === true && 'value' in value) return value.value
+      throw new Error(strings.common.unavailable)
+    }
+    return value
   }
 
   requireBotClient(): BotRemoteClient {
@@ -333,11 +340,8 @@ export class AndroidRemoteConnection {
       // Existing authenticated, encrypted capability RPC; no new wire heartbeat.
       await core.rpc('harness.transport.describe', {}, undefined, { timeoutMs: 5_000 })
       return this.core === core
-    } catch (error) {
-      // Old ApiProxy Hosts can omit capability discovery. An authenticated
-      // METHOD_NOT_FOUND response still proves this same carrier is alive.
-      return this.core === core && error instanceof Error
-        && (error as Error & { code?: unknown }).code === 'METHOD_NOT_FOUND'
+    } catch {
+      return false
     }
   }
 

@@ -364,14 +364,14 @@ export class HostServerApi {
     })
   }
 
-  async listDevices(): Promise<ServerHostDevice[]> {
-    const result = await this.request<{ items?: unknown }>('/api/v1/devices')
+  async listDevices(signal?: AbortSignal): Promise<ServerHostDevice[]> {
+    const result = await this.request<{ items?: unknown }>('/api/v1/devices', { signal })
     if (!Array.isArray(result.items)) throw new ServerApiError('INVALID_MESSAGE', 'The Server returned an invalid device list.', false)
     return result.items.map(parseHostDevice)
   }
 
-  async deviceFor(peerDeviceId: string): Promise<AuthorizedPeerDevice> {
-    const result = await this.request<unknown>(`/api/v1/devices/${encodeURIComponent(peerDeviceId)}`)
+  async deviceFor(peerDeviceId: string, signal?: AbortSignal): Promise<AuthorizedPeerDevice> {
+    const result = await this.request<unknown>(`/api/v1/devices/${encodeURIComponent(peerDeviceId)}`, { signal })
     return parseAuthorizedPeer(result)
   }
 
@@ -383,8 +383,8 @@ export class HostServerApi {
     return result.iceServers.map(parseIceServer)
   }
 
-  async presenceFor(deviceId: string): Promise<{ online: boolean; lastSeenAt?: number }> {
-    const result = await this.request<Record<string, unknown>>(`/api/v1/devices/${encodeURIComponent(deviceId)}/presence`)
+  async presenceFor(deviceId: string, signal?: AbortSignal): Promise<{ online: boolean; lastSeenAt?: number }> {
+    const result = await this.request<Record<string, unknown>>(`/api/v1/devices/${encodeURIComponent(deviceId)}/presence`, { signal })
     if (typeof result.online !== 'boolean'
       || (result.lastSeenAt !== null && result.lastSeenAt !== undefined && !Number.isSafeInteger(result.lastSeenAt))) {
       throw new ServerApiError('INVALID_MESSAGE', 'The Server returned invalid device presence.', false)
@@ -481,7 +481,7 @@ export class HostServerApi {
       if (!response.ok) {
         const envelope = (body ?? {}) as ErrorEnvelope
         throw new ServerApiError(
-          typeof envelope.error?.code === 'string' ? envelope.error.code : mapStatus(response.status),
+          responseErrorCode(response.status, envelope.error?.code),
           typeof envelope.error?.message === 'string' ? envelope.error.message : 'The Server rejected the request.',
           envelope.error?.retryable === true || response.status >= 500,
           response.status,
@@ -574,13 +574,26 @@ async function parseBody(response: Response): Promise<unknown> {
   }
 }
 
-function mapStatus(status: number): string {
-  if (status === 401) return 'AUTH_INVALID'
-  if (status === 403) return 'AUTH_REQUIRED'
-  if (status === 404) return 'DEVICE_NOT_FOUND'
+function responseErrorCode(status: number, serverCode: unknown): string {
+  // Only a specific authorization response may change the local login state.
+  // A proxy error or an unclassified rejection must preserve stored credentials.
+  if (status >= 500) return 'CONNECTION_FAILED'
   if (status === 429) return 'RATE_LIMITED'
-  return status >= 500 ? 'CONNECTION_FAILED' : 'INVALID_MESSAGE'
+  if ((status === 401 || status === 403) && typeof serverCode === 'string') return serverCode
+  if (status === 401 || status === 403) return 'REQUEST_REJECTED'
+  if (typeof serverCode === 'string' && !AUTHORIZATION_ERROR_CODES.has(serverCode)) return serverCode
+  if (status === 404) return 'DEVICE_NOT_FOUND'
+  return 'INVALID_MESSAGE'
 }
+
+const AUTHORIZATION_ERROR_CODES = new Set([
+  'ACCOUNT_AUTH_REQUIRED',
+  'AUTH_INVALID',
+  'AUTH_REQUIRED',
+  'TOKEN_EXPIRED',
+  'DEVICE_REVOKED',
+  'DEVICE_OWNERSHIP_REQUIRED',
+])
 
 function parseHostDevice(value: unknown): ServerHostDevice {
   const item = requireRecord(value, 'host device')

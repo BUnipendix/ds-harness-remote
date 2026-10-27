@@ -1,6 +1,6 @@
 {
   "name": "@dsh-remote/protocol",
-  "version": "0.5.19",
+  "version": "0.5.21",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

@@ -360,8 +360,7 @@ wss://dsh.r2049.cn/ws/v1/connect
 }
 ```
 
-Host 在启动时优先调用本机 rc.2 `ApiProxy.host.describe` 读取 `version`；alpha 不提供
-ApiProxy，或旧 Harness 返回已知占位值/不提供该方法时，从当前运行入口定位 `@deepseek-ai/dsh`
+Host 在启动时从当前运行入口定位 `@deepseek-ai/dsh`
 运行包读取版本：CLI/dsh-TUI 入口位于该包根目录之下，沿入口祖先链查找；0.2.0 Desktop 由
 `app.asar` 内的 `@deepseek-ai/dsh-desktop-host` 入口拉起、Harness 包是其兄弟目录，则按入口的
 模块作用域解析 `@deepseek-ai/dsh/package.json`。读取成功时，Host 在设备注册
@@ -418,7 +417,7 @@ Client 发起 `connect.request` 且 Host 在线时，Host WebSocket 收到：
 
 `clientIdentityKey` 是本次端到端安全握手的远端静态公钥。插件必须把它绑定到该 `connectionId`，握手期间或连接建立后都不得被替换。Client 同样通过 `GET /api/v1/devices/{hostDeviceId}` 获取并固定 Host 的 `identityKey`。Server 只路由密文，不能替代端到端密钥校验。
 
-Host 必须按 `connectionId` 同时维护来自不同 `clientDeviceId` 的安全通道和对应 Harness bridge（rc.2 ApiProxy 或 v0.1.2 Typert Remote）；
+Host 必须按 `connectionId` 同时维护来自不同 `clientDeviceId` 的安全通道和对应 Harness bridge（Typert Remote）；
 手机 Web 与电脑 Web 等不同设备可以同时在线。每个连接独立计算 pending RPC 和 stream 上限，
 其 stream frame 只返回原连接。同一 `clientDeviceId` 重连时只替换该设备的旧连接，不影响其他
 Client。

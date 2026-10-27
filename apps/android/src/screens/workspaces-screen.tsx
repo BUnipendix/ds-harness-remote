@@ -1,7 +1,7 @@
 import { isSubagentSession } from '../lib/session-kind'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ActivityIndicator, Alert, Keyboard, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, type StyleProp, type ViewStyle, View } from 'react-native'
-import { ArrowDown, ArrowUp, Bot, ChevronDown, ChevronRight, CircleAlert, CirclePlus, Code2, Eye, EyeOff, Folder, FolderOpen, MoreVertical, Pencil, RefreshCw, Search, Sparkles, Star, Trash2, WifiOff, X } from 'lucide-react-native'
+import { ArrowDown, ArrowUp, Bot, ChevronDown, ChevronRight, CircleAlert, CirclePlus, Code2, Eye, EyeOff, Folder, FolderOpen, MoreVertical, Pencil, Puzzle, RefreshCw, Search, Sparkles, Star, Trash2, WifiOff, X } from 'lucide-react-native'
 import { useAppStore } from '../state/store'
 import type { DirectoryListing, RemoteSession, WorkspaceView } from '../types'
 import { BlurHeaderFrame, Button, EmptyState, IconButton, Screen, TopBar } from '../ui/components'
@@ -11,6 +11,7 @@ import { useTheme, type ThemeColors } from '../ui/theme-context'
 import { useResponsiveLayout } from '../ui/responsive'
 import { useThemedStyles } from '../ui/use-themed-styles'
 import { strings as zhCN } from '../locales/i18n'
+import { PluginsModal } from './plugins-modal'
 import { useLiveSessionStatus } from './device-screens'
 import { workspaceStableKey } from '../lib/workspace-key'
 import { workspaceParentPath } from '../lib/workspace-path'
@@ -85,6 +86,7 @@ export function WorkspacesScreen({ onBack, onOpenDevices, onSession, onDeviceInf
   const [backendReady, setBackendReady] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
+  const [pluginsOpen, setPluginsOpen] = useState(false)
   const [activeBackend, setActiveBackend] = useState<'harness' | 'codex' | 'cursor' | 'antigravity' | 'pi' | 'opencode' | 'claude'>(() => shortcutBackend ?? initialWorkspaceBackend(workspaces, codexAvailable, cursorAvailable, antigravityAvailable, piAvailable, opencodeAvailable, claudeAvailable))
   const [searchQuery, setSearchQuery] = useState('')
   const [renameTarget, setRenameTarget] = useState<WorkspaceView | undefined>(undefined)
@@ -367,12 +369,13 @@ export function WorkspacesScreen({ onBack, onOpenDevices, onSession, onDeviceInf
 
   return (
     <View style={styles.flex}>
+      <PluginsModal visible={pluginsOpen} onClose={() => setPluginsOpen(false)} />
       <BlurHeaderFrame header={<TopBar
         title={selectedDevice?.name ?? zhCN.workspaces.noDevice}
         titleLines={2}
         onTitlePress={onDeviceInfo}
         onBack={onBack}
-        action={<><IconButton dense label={zhCN.bots.mode} icon={Bot} tint={colors.primary} onPress={() => onBotMode(true)} /><IconButton dense label={zhCN.workspaces.create} icon={CirclePlus} tint={colors.primary} onPress={() => setCreateOpen(true)} /></>}
+        action={<>{connected && <IconButton dense label={zhCN.plugins.title} icon={Puzzle} tint={colors.primary} onPress={() => setPluginsOpen(true)} />}<IconButton dense label={zhCN.bots.mode} icon={Bot} tint={colors.primary} onPress={() => onBotMode(true)} /><IconButton dense label={zhCN.workspaces.create} icon={CirclePlus} tint={colors.primary} onPress={() => setCreateOpen(true)} /></>}
       />}>
         <Screen scrollRef={scrollRef} refreshing={refreshing} onRefresh={() => void refresh()}>
           {showBackendTabs && <View style={[styles.backendTabs, styles.contentTop]} accessibilityRole="tablist">

@@ -1,5 +1,8 @@
 # DSH Remote Protocol v1
 
+2026-10-25 实现边界：Host 插件、随包 Remote 客户端和 Android 已移除 Harness `0.1.1-rc.2` ApiProxy 兼容。请使用提供官方 Typert Remote carrier 的 Host；仅提供 ApiProxy 或不支持能力发现的旧 Host 会被拒绝，不再降级。CodeX/ACP 保留独立数据面，Desktop 内存投影统一使用 Typert。本轮不改独立 VS Code Client 或独立 Remote Web 仓库。
+`harness.api.*` 方法/事件/capability 的以下定义仅保留为历史线协议与旧 Client 类型契约；当前 Host 不注册这些方法，调用返回 `METHOD_NOT_FOUND`。
+
 状态：Draft v0.2（首版发布前，不保留旧业务 RPC 兼容）
 日期：2026-09-10
 协议版本：`1`
@@ -16,7 +19,7 @@
 当前仓库负责：
 
 - `packages/protocol` 的类型、schema、编解码和版本校验
-- Plugin 的 rc.2 ApiProxy tunnel、v0.1.2 alpha.1–rc.1 与 v0.1.5 rc.1 Session V3 Typert Remote tunnel、加密、重连和 capability 行为
+- Plugin 的v0.1.2 alpha.1–rc.1 与 v0.1.5 rc.1 Session V3 Typert Remote tunnel、加密、重连和 capability 行为
 - Mock Host/Client 与协议 conformance fixtures
 
 `apps/server` 实现本文的单账号注册/刷新、设备发现、Control 与 Relay 子集；范围见 [最小 Server](../apps/server/README.md)。其余多账号、主机匹配码、Browser 授权、WebRTC/TURN 与 Admin 能力仍属于独立 Server，不得把未实现的能力声明为可用。
@@ -35,7 +38,7 @@ DSH Remote Protocol 定义 Host Plugin、DSH Remote Server 和 Remote Client 之
 - WebSocket authentication
 - WebRTC signaling 与 Relay routing
 - Host/Client 端到端安全通道
-- rc.2 ApiProxy tunnel 的 unary、respond 与 mux/host streaming
+- 历史 rc.2 ApiProxy 线协议定义（当前 Host / Android 已移除）
 - v0.1.2 alpha.1–rc.1 与 v0.1.5 rc.1 Session V3 Typert Remote 的 unary、stream 与 `$events` 双向事件 carrier
 - reconnect 与原生 stream 重建
 - capability 与版本协商
@@ -74,7 +77,6 @@ Remote Protocol
   RPC request / response / error / event
 
 Harness Business Tunnel
-  rc.2 ApiProxy call / respond / mux / host
   v0.1.2 Typert Remote call / stream / events
 ```
 
@@ -674,10 +676,10 @@ Control-only 类型（hello, signaling, relay）禁止出现在 secure channel �
 
 ## 16. RPC
 
-Plugin Host 的 Harness 业务路由只接受 capability 对应的官方 Harness tunnel。rc.2 使用：`harness.api.call`、
+Plugin Host 的 Harness 业务路由只接受 capability 对应的官方 Typert Remote tunnel。已移除的历史 rc.2 路由包括：`harness.api.call`、
 `harness.api.transfer.open`、`harness.api.transfer.chunk`、`harness.api.transfer.commit`、
 `harness.api.transfer.read`、`harness.api.transfer.close`、`harness.api.respond`、
-`harness.api.stream.open`、`harness.api.stream.close`。alpha 使用：
+`harness.api.stream.open`、`harness.api.stream.close`。当前 Host 仅使用：
 `harness.remote.call`、`harness.remote.transfer.open`、`harness.remote.transfer.chunk`、
 `harness.remote.transfer.commit`、`harness.remote.transfer.read`、`harness.remote.transfer.close`、
 `harness.remote.stream.open`、`harness.remote.stream.close`。所有新旧 Host 都可接受只读的
@@ -829,10 +831,9 @@ Host handshake 的 capability 例子：
 ```json
 [
   "transport.relay",
-  "harness.api.v1",
-  "harness.api.transfer.v1",
   "harness.remote.v1",
   "harness.remote.transfer.v1",
+  "harness.remote.stream.transfer.v1",
   "fileviewer.read.v1",
   "workspace.upload.v1",
   "codex.appserver.v1",
@@ -844,10 +845,10 @@ Host handshake 的 capability 例子：
 
 建立 Noise channel 后，Desktop/Web/Android Client 必须先调用 `harness.transport.describe`，Params 为
 空对象，Result 为 `{ "capabilities": string[], "workspaceTypes"?: RemoteWorkspaceTypeDescription[] }`。当前 Host 按实际注入服务动态返回
-`harness.api.v1`、`harness.remote.v1` 或 `harness.remote.v3`，不得宣告不存在的 carrier。
+`harness.remote.v1` 或 `harness.remote.v3`，不得宣告不存在的 carrier。
 Typert Host 必须只宣告与本机 Session wire 对应的一项：v0.1.2 使用
 `harness.remote.v1`，v0.1.5 rc.1 使用 `harness.remote.v3`；禁止同时宣告两项。旧 Host 返回
-`METHOD_NOT_FOUND` 时，Client 才使用 `clientVersion` 做 rc.2 保守降级。
+`METHOD_NOT_FOUND` 时，当前 Plugin Client 与 Android 必须拒绝连接，不得按版本号推测 ApiProxy 能力。
 
 支持 `remote.history.compact.v1` 的 Host 接受加密 RPC `remote.history.configure`，
 Params 为严格的 `{ "compact": boolean }`，Result 回显 `{ "compact": boolean }`。
@@ -855,7 +856,7 @@ Params 为严格的 `{ "compact": boolean }`，Result 回显 `{ "compact": boole
 不影响其他 Client。移动端全局偏好在每次打开会话前设置，重连重新打开时再次设置。
 未声明该能力的旧 Host 不发送此 RPC，也不在移动端做本地精简兜底。
 
-精简作用于 Harness ApiProxy 历史、Typert `session/page|history` 与 `session/follow` snapshot、
+精简作用于 Typert `session/page|history` 与 `session/follow` snapshot、
 CodeX 和 ACP 的 `dsh/sessionHistory`，包括既有分块 transfer 路径。保留正文、历史记录顺序、
 seq/cursor/throughSeq/hasMore、轮次生命周期及工具关联/错误状态；工具参数和输出转为有界摘要，
 省略完整工具展示投影。实时流与审批原样传递，允许的 RPC/权限边界不变。
@@ -934,31 +935,30 @@ Web 接入时，`workspaceTypes` 是现有 `harness.transport.describe` 响应�
 无需修改 Server 中继或握手协议。既有 Harness / CodeX 数据面应直接复用；新客户端优先读取
 有效的类型条目及 `available`，旧 Host 未提供该字段时才沿用 `capabilities` 判断。类型列表
 不是 Harness 入口的完整替代：当前 Host 单独声明 CodeX 和已启用的 ACP 后端，Harness
-入口仍由原有 `harness.api.v1` / `harness.remote.v1|v3` 能力决定。未知类型可以展示其 `name`，
+入口由 `harness.remote.v1|v3` 能力决定。未知类型可以展示其 `name`，
 但只有已有对应 RPC / 数据面处理器时才允许进入，不得据类型声明代理任意方法。
 
-ApiProxy 与 Typert Remote contract 仍随 Desktop Plugin 发布物升级，但新增的可选业务能力
-必须保持加法兼容。当前实现不翻译 rc.2 与 alpha 的完整 Harness 业务模型：本地与远端
+Typert Remote contract 随 Desktop Plugin 发布物升级，新增的可选业务能力保持加法兼容。
+rc.2 ApiProxy 已明确移除。当前实现不翻译 rc.2 与 Typert 的完整 Harness 业务模型：本地与远端
 carrier 或 Session 代际不一致时，Desktop Client 必须在选择目标、创建 Workspace 或其它 mutation 前
 返回 `HARNESS_VERSION_INCOMPATIBLE`。
 
-当前最低兼容矩阵：
+当前 Plugin Client / Android Harness 兼容矩阵：
 
 | Host Plugin / Harness | 业务 carrier | Remote Workspace / Session | File Viewer | 图片分块 |
 | --- | --- | --- | --- | --- |
-| `0.3.15–0.3.23` / rc.2 | `harness.api.v1`（旧 Host 由版本降级识别） | 支持 | `0.3.17+` 且 provider 存在时支持 | 不支持 |
-| `0.3.24–0.3.36` / rc.2 | `harness.api.v1` | 支持 | provider 存在时支持 | `harness.api.transfer.v1` |
-| `0.4.x` / rc.2 | capability 探测返回 `harness.api.v1` | 支持 | provider 存在时支持 | `harness.api.transfer.v1` |
+| `0.3.15–0.3.23` / rc.2 | `harness.api.v1`（历史 capability） | 不支持（已移除） | `0.3.17+` 且 provider 存在时支持 | 不支持 |
+| `0.3.24–0.3.36` / rc.2 | `harness.api.v1` | 不支持（已移除） | provider 存在时支持 | `harness.api.transfer.v1` |
+| `0.4.x` / rc.2 | capability 探测返回 `harness.api.v1` | 不支持（已移除） | provider 存在时支持 | `harness.api.transfer.v1` |
 | `0.4.x` / v0.1.2 alpha.1–rc.1 | capability 探测返回 `harness.remote.v1` | 支持 | provider 存在时支持 | `harness.remote.transfer.v1` |
 | `0.4.12+` / v0.1.5 rc.1 与 v0.1.6 alpha.1 | capability 探测返回 `harness.remote.v3` | 支持 | provider 存在时支持 | `harness.remote.transfer.v1` |
 
-未知版本按 `0.3.15` 之前的能力处理。未来 Server 暴露 Host capability 后，应优先使用
-capability，`clientVersion` 仅保留为旧 Server 的兼容路径。
+当前 Plugin Client 与 Android 必须使用加密通道上的 capability 探测，不从 `clientVersion` 推测或降级到旧 ApiProxy。
 
 ## 18. 历史数据结构（已废弃）
 
 §18.1–18.6 是冻结 Android 原型的旧投影，已在代码中清除，不是 Plugin Host 可接受或
-发出的结构。业务结构以 rc.2 官方 ApiProxy 或 v0.1.2 alpha Typert Remote contract 为准。
+发出的结构。当前业务结构以官方 Typert Remote contract 为准；rc.2 的以下定义仅作历史记录。
 
 原结构包括：SystemInfo、WorkspaceInfo、SessionSummary（含 status/createdAt/lastSeq）、
 Message（含 role/content 数组）、ToolCall（含 callId/input/output）和 PermissionRequest
@@ -970,7 +970,7 @@ Message（含 role/content 数组）、ToolCall（含 callId/input/output）和 
 `session.send`、`session.stop`、`permissions.respond`、`connection.ping`、`sync.from`）
 均已退出 Plugin 协议，Host 必须拒绝。
 
-### Native Harness API bridge
+### Historical Native Harness API bridge（已移除）
 
 `harness.api.v1` 用于让安装了 Plugin Client face 的本地 Harness 继续使用官方 UI 操作远端 Host。它不是通用反射 RPC；Host 必须以代码内固定 allowlist 校验每个 `method`，未知或禁止方法返回 `METHOD_NOT_ALLOWED`。
 
@@ -1111,7 +1111,7 @@ Harness `0.2.1` 增加固定官方端点 `userQuestions/answer`（call）、`use
 
 限时问答事件保留官方 `wait.callId` 与 `wait.timed`；Client 先打开 `attachWait`，根据 Host 返回的 `remainingMs` 计时，窗口内回答沿用 `$events/result`，到期回传具备 `name: UserQuestionError`、`code: ASK_TIMED_OUT` 的拒绝结果。断线释放 claim 并取消本地计时，禁止重放回复。只有 Host 的 `userQuestions.active` projection 标记 `continued` 后，才可调用 `answer` 补答；`answer` 接受回复仅表示已排队，Client 不将其提前标记为已回答；`settled` 确认问题已结束。投影序号落后时不得恢复旧问题。上一版 RC 没有 `wait.timed` 的问答保持旧事件流程。
 
-当前兼容维护目标为 Typert Session V3 `0.2.x`；前述 ApiProxy 章节保留历史线协议，不表示继续适配其 API。
+当前兼容维护目标为 Typert Session V3 `0.2.x`；前述 ApiProxy 章节仅保留历史线协议，当前 Host 不再实现其路由，Plugin Client 与 Android 不再连接该 carrier。
 
 #### `harness.remote.stream.open` / `harness.remote.stream.close`
 
@@ -1135,6 +1135,29 @@ Host 对每个 item 发送 `harness.remote.frame`：
 不能把它解释成流结束。终止通过 `harness.remote.stream.closed` 单独发送，reason 为
 `cancelled|completed|failed|peer-disconnected`；`failed` 可携带 Gateway 归一化后的
 `failure: { code, message, details }`。
+
+支持 `harness.remote.stream.transfer.v1` 的 Host 允许 Client 在 open 中显式附加
+`transferFrames: true`。Client 必须先通过 `harness.transport.describe` 确认该能力；
+旧 Host 不接收该字段，未选择此能力的 Client 继续收到原有 inline 帧。
+选中后，超过 4 MiB secure-message 上限的单个 item 使用以下描述帧，不能同时含 `value`：
+
+```json
+{ "streamId": "...", "hasValue": true, "transfer": {
+  "kind": "chunked", "transferId": "UUID", "totalBytes": 6000000, "totalChunks": 12
+} }
+```
+
+`harness.remote.transfer.read/close` 按既有 512 KiB 分块规则读取并释放该输出 transfer；
+拼回的 UTF-8 JSON 是完整原帧 `{ streamId, hasValue: true, value? }`，禁止嵌套 transfer，
+必须核对 streamId、总大小、块数、逐块序号/字节数及 canonical base64。单项最多 288 MiB，
+与 unary response 共用每连接最多两个输出 transfer 的限额。Host 在 Client 完成读取并
+close 前暂停该 source，后续 delta 和 closed 不能越过它；Client 按序重组后才交给原生 UI。
+Client 的 256 项/4 MiB 等待队列只存小描述，同一 stream 同时只重组一项；不截断消息、
+工具结果或游标，不修改 SessionStore。取消、断线、提前 close、乱序读取及 2 分钟 idle
+均终止该 stream 并释放 transfer；失败不重放 prompt 或其他操作。
+
+当前 Desktop Plugin 已实现此可选能力。其他 Client 未显式启用时沿用原协议；此扩展
+不要求 Server 变更，也不提高单条加密消息或 Relay 帧上限。
 
 `$events` 是官方 alpha Gateway 的 Host-to-Client Cordis event stream。Client 对 waterfall
 事件的结果必须经 allowlisted `$events/result` unary endpoint 返回原 Host；Plugin 不创造
@@ -1324,8 +1347,8 @@ Web / Desktop 可在 Client 内存中把 ACP Workspace / Session 投影到原生
 新工作区 ID 分别使用 `cursor:cwd:<encoded-path>` 和 `antigravity:cwd:<encoded-path>`；
 工作区只接受所属后端前缀，不兼容旧 AGY 的 `cursor:cwd:` ID，也不接受无前缀路径作为 ID。既有 Session ID（Cursor `cursor:`、AGY `acp:`）
 保持不变。`agent.acp.v1` 仅表示公共 ACP 数据面；Cursor 和 AGY 分别必须明确声明
-`agent.acp.cursor.v1` 和 `agent.acp.antigravity.v1`。ACP 尚未发布使用，不提供旧 ACP
-配置或工作区 ID 的迁移逻辑。
+`agent.acp.cursor.v1` 和 `agent.acp.antigravity.v1`。不提供早期 ACP
+配置或工作区 ID 的迁移逻辑；该限制不表示 ACP 尚未实现或发布。
 `dsh/sessionHistory` 使用有界 ACP transfer 读取含图片或大文本的响应；图片 Prompt 的
 transfer commit 使用与普通 Prompt 相同的长超时，chunk 顺序、大小与连接归属校验不变。
 History 显式后端及 Session 前缀必须与已绑定的后端一致；Cursor History 不读取 AGY transcript。
@@ -1347,7 +1370,7 @@ Codex 是现有 Remote Plugin 内部的可选独立业务领域，不是第二�
 `PATH`；用户显式配置的 binary 不得被替换或补充候选项。
 
 Client Plugin 可在用户从 Remote 工作区选择器进入 CodeX 模式后，将已认证的 `codex.app.*`
-carrier 包装成临时 rc.2 `ApiProxy` 或 v0.1.2 Typert target。该 target 只在内存中把 CodeX 工作目录、
+carrier 包装成临时 Typert target。该 target 只在内存中把 CodeX 工作目录、
 Thread、History/live frame 映射为 DSH 原生 Workspace/Session/Event，使原生 Conversation Renderer
 和 Composer 可以消费；它不是新的线协议，也不得把虚拟记录写入 DSH SessionStore、Workspace
 数据库或 Harness 日志。退出 CodeX 模式或连接关闭时必须销毁 target 和全部 stream。
@@ -1500,7 +1523,7 @@ ACP 同时要求调用连接的 peer 仍有效、backend 可用、session owner 
 | `workspace.upload.commit` | `{sessionId, uploadId}` | `{name, path, bytes}` |
 | `workspace.upload.abort` | `{sessionId, uploadId}` | `{aborted:true}` |
 
-- `open`：`totalBytes` 是 0–20 MiB 的整数。`name` 是单个文件名，UTF-8 编码最多
+- `open`：`totalBytes` 是非负整数：Host 验证当前连接为 LAN 或直接 P2P 时最大 1 GiB（1,073,741,824 bytes）；TURN、Relay、未知路径最大 20 MiB。Host 在 open、chunk 和 commit 重新检查实际路径；大文件传输回退至中继时拒绝并清理未提交数据。旧 Host 可保留 20 MiB 限额，Client 不得自动重传。`name` 是单个文件名，UTF-8 编码最多
   220 bytes；禁止 `/`、`\`、ASCII 控制字符、DEL、`<>:"|?*`、`.`、`..`、尾部点/空格、
   Windows 保留名，以及 Host 临时文件前缀 `.dsh-upload-`。不能传 `cwd`、目标目录或目标路径。
   Host 当前返回 `chunkBytes: 65536`，表示后续每块**解码后**最多 64 KiB。
@@ -1772,7 +1795,7 @@ pong 回显 nonce。Heartbeat 不能携带业务数据。
 | File Viewer range / RPC | 512 KiB |
 | File Viewer directory entries / RPC | 1,000 |
 | RPC text input | 64 KiB |
-| Workspace upload file | 20 MiB；允许零字节 |
+| Workspace upload file | LAN / direct P2P：1 GiB；TURN / Relay / 未知：20 MiB；允许零字节 |
 | Workspace upload chunk（解码后） | 64 KiB；以 open 返回的 chunkBytes 为准 |
 | Workspace active uploads / connection | 2；2 min idle 后回收 |
 | Workspace upload authority lookup | 每次最多 15 s |
@@ -1841,7 +1864,7 @@ UI 排版、静态说明和 Admin 普通筛选不属于协议 conformance。
 - 每个 schema 都有正反测试 vector。
 - Noise library 和握手 transcript 已固定。
 - Server 只解析 control envelope，不解析 relay plaintext。
-- Host ApiProxy bridge allowlist 与真实 Harness API 一致。
+- Host Typert bridge allowlist 与真实 Harness API 一致。
 - Web/Host/Mock Host 至少两两互操作。
 
 ### CodeX Session workspace and terminal scope

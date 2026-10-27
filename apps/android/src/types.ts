@@ -180,7 +180,7 @@ export interface SessionModels {
   failures: ModelCatalogFailure[]
 }
 
-/** Native ApiProxy session row projection (mirrors @deepseek-ai/dsh-host-apiproxy). */
+/** Native Harness session row projection. */
 /** One durable roster row from the session's `agentTeam` projection. */
 export interface TeamMemberSnapshot {
   id: string
@@ -345,10 +345,15 @@ export interface PromptImage {
   name?: string
 }
 
-/** Image presentation retained in the local optimistic chat row. */
+/** Image presentation; durable references remain bound to their owning session. */
 export interface ChatImage {
+  attachmentId?: string
+  sessionId?: string
   uri?: string
   name?: string
+  mediaType?: string
+  width?: number
+  height?: number
 }
 
 export interface ImageAttachmentLimits {
@@ -502,3 +507,12 @@ export function transportPreferenceOptions(): TransportPreferenceOption[] {
     { value: 'relay', name: zhCN.transport.relay, description: zhCN.transport.relayDescription },
   ]
 }
+
+export type {
+  ScheduleCatalogEntry,
+  ScheduleDeleteResult,
+  ScheduleDeliveryHistoryResult,
+  ScheduleDeliveryReceipt,
+  ScheduleDeliveryRecord,
+  ScheduleKind,
+} from '@dsh-remote/client-core'

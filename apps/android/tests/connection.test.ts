@@ -13,8 +13,6 @@ class FakeCore {
     this.rpcCalls.push({ method, params })
     if (method === 'harness.transport.describe') return { capabilities: testState.capabilities,
       ...(testState.workspaceTypes === undefined ? {} : { workspaceTypes: testState.workspaceTypes }) }
-    if (method === 'harness.api.stream.open') return {}
-    if (method === 'harness.api.stream.close') return {}
     if (method === 'harness.remote.stream.open') return {}
     if (method === 'harness.remote.stream.close') return {}
     if (method === 'harness.remote.call') {
@@ -49,7 +47,7 @@ class FakeCore {
 }
 
 const testState = vi.hoisted(() => ({
-  capabilities: ['harness.api.v1'] as string[],
+  capabilities: ['harness.remote.v1'] as string[],
   workspaceTypes: undefined as unknown,
   cores: [] as FakeCore[],
   connectGate: undefined as undefined | (() => Promise<void>),
@@ -98,7 +96,7 @@ const host: RemoteDevice = {
 
 describe('AndroidRemoteConnection Harness transport selection', () => {
   const prepareScenario1 = () => {
-    testState.capabilities = ['harness.api.v1']
+    testState.capabilities = ['harness.remote.v1']
     testState.workspaceTypes = undefined
     testState.cores.length = 0
     testState.connectGate = undefined
@@ -109,6 +107,32 @@ afterEach(async () => {
   await Promise.all(testState.cores.map(core => core.close()))
   vi.useRealTimers()
 })
+
+  it('uses the native Typert attachment contract and rejects late images from retired connections', async () => {
+    await runScenarios(['direct', 'business-result', 'denied', 'disconnected', 'cancelled'].map(mode => ({ name: mode, run: async () => {
+      prepareScenario1()
+      testState.capabilities = ['harness.remote.v1', 'harness.remote.transfer.v1']
+      const connection = new AndroidRemoteConnection()
+      await connection.connect('https://server.example.com', identity, host, 'synthetic', () => undefined)
+      const core = testState.cores[0]!
+      const controller = new AbortController()
+      const value = { attachment: { attachmentId: 'a1', mediaType: 'image/png' }, data: 'synthetic' }
+      const rpc = core.rpc.bind(core)
+      vi.spyOn(core, 'rpc').mockImplementation(async (method, params) => {
+        if (method !== 'harness.remote.call') return rpc(method, params)
+        expect(params).toEqual({ endpoint: 'session/attachment', payload: { args: { request: { sessionId: 's1', attachmentId: 'a1' } } } })
+        if (mode === 'disconnected') await connection.close()
+        if (mode === 'cancelled') controller.abort()
+        return { ok: true, value: mode === 'business-result' ? { ok: true, value }
+          : mode === 'denied' ? { ok: false, error: { code: 'not-found' } } : value }
+      })
+      try {
+        const result = connection.readSessionImageAttachment('s1', 'a1', controller.signal)
+        if (mode === 'direct' || mode === 'business-result') await expect(result).resolves.toEqual(value)
+        else await expect(result).rejects.toThrow()
+      } finally { await connection.close() }
+    } })))
+  })
 
   it('binds Bot requests to the advertised encrypted Host and rejects retired clients', async () => {
     await runScenarios(['unsupported', 'current', 'replaced', 'revoked'].map(outcome => ({ name: outcome, run: async () => {
@@ -128,7 +152,7 @@ afterEach(async () => {
           expect(core.rpc).toHaveBeenCalledWith('plugin.route.call', { route: 'api/bot', body: { endpoint: 'state', payload: null } }, undefined)
         } else {
           if (outcome === 'replaced') await connection.connect('https://server.example.com', identity, { ...host, deviceId: 'host-2' }, 'synthetic', () => undefined)
-          else { testState.capabilities = ['harness.api.v1']; await connection.refreshBackends() }
+          else { testState.capabilities = ['harness.remote.v1']; await connection.refreshBackends() }
           const spy = vi.spyOn(core, 'rpc')
           await expect(client.call('send', { sessionId: 'bot', text: 'hello' })).rejects.toThrow()
           expect(spy).not.toHaveBeenCalled()
@@ -176,7 +200,7 @@ afterEach(async () => {
         await vi.advanceTimersByTimeAsync(25_000)
         expect(rpc).toHaveBeenCalledTimes(2)
         expect(closed).not.toHaveBeenCalled()
-      } else expect(rpc).not.toHaveBeenCalled()
+      } else expect(rpc.mock.calls.some(([method]) => method === 'harness.transport.describe')).toBe(false)
       await connection.close()
       const calls = rpc.mock.calls.length
       await vi.advanceTimersByTimeAsync(60_000)
@@ -238,12 +262,12 @@ afterEach(async () => {
         },
       },
       {
-        name: 'a legacy capability rejection still proves the encrypted round trip',
+        name: 'rejects health replies from a Host that no longer provides capability discovery',
         run: async () => {
           const connection = new AndroidRemoteConnection()
           await connection.connect('https://server.example.com', identity, host, 'synthetic', () => undefined, { forceRelay: true })
           vi.spyOn(testState.cores[0]!, 'rpc').mockRejectedValueOnce(Object.assign(new Error('unsupported'), { code: 'METHOD_NOT_FOUND' }))
-          expect(await connection.checkHealth()).toBe(true)
+          expect(await connection.checkHealth()).toBe(false)
           await connection.close()
         },
       },
@@ -311,7 +335,7 @@ afterEach(async () => {
           run: async () => {
             const capability = `agent.acp.${backend}.v1`
             const type = { id: backend, name: backend, capability, available: false }
-            testState.capabilities = ['harness.api.v1', capability]
+            testState.capabilities = ['harness.remote.v1', capability]
             testState.workspaceTypes = [type]
             const connection = new AndroidRemoteConnection()
             const available = () =>
@@ -328,10 +352,10 @@ afterEach(async () => {
             testState.workspaceTypes = [{ ...type, available: true }]
             await connection.refreshBackends()
             expect(available()).toBe(true)
-            testState.capabilities = ['harness.api.v1', 'agent.acp.v1']
+            testState.capabilities = ['harness.remote.v1', 'agent.acp.v1']
             await connection.refreshBackends()
             expect(available()).toBe(false)
-            testState.capabilities = ['harness.api.v1', capability]
+            testState.capabilities = ['harness.remote.v1', capability]
             await connection.refreshBackends()
             expect(available()).toBe(true)
             testState.workspaceTypes = [{ ...type, available: false }]
@@ -348,7 +372,7 @@ afterEach(async () => {
   })
 
   it('preserves CodeX capability discovery for Hosts without workspaceTypes', async () => {
-    testState.capabilities = ['harness.api.v1', 'codex.appserver.v1', 'codex.appserver.transfer.v1']
+    testState.capabilities = ['harness.remote.v1', 'codex.appserver.v1', 'codex.appserver.transfer.v1']
     const connection = new AndroidRemoteConnection()
     await connection.connect('https://server.example.com', identity, host, 'access-token', () => undefined, { forceRelay: true })
     expect(connection.hasCodex()).toBe(true)
@@ -358,13 +382,20 @@ afterEach(async () => {
     await connection.close()
   })
 
-  it('opens the legacy ApiProxy mux for older Hosts', async () => {
-    const connection = new AndroidRemoteConnection()
-    await connection.connect('https://server.example.com', identity, host, 'access-token', () => undefined, { forceRelay: true })
-
-    expect(testState.cores[0]?.rpcCalls.map(call => call.method)).toContain('harness.api.stream.open')
-
-    await connection.close()
+  it('rejects ApiProxy-only and undiscoverable Hosts without sending legacy traffic', async () => {
+    await runScenarios(['api-only', 'no-discovery'].map(mode => ({ name: mode, run: async () => {
+      prepareScenario1()
+      testState.capabilities = ['harness.api.v1', 'harness.api.transfer.v1']
+      const spy = mode === 'no-discovery' ? vi.spyOn(FakeCore.prototype, 'rpc').mockRejectedValueOnce(
+        Object.assign(new Error('unknown method'), { code: 'METHOD_NOT_FOUND' }),
+      ) : undefined
+      const connection = new AndroidRemoteConnection()
+      try {
+        await expect(connection.connect('https://server.example.com', identity, host, 'synthetic', () => undefined)).rejects.toThrow()
+        expect(() => connection.requireProxy()).toThrow()
+        expect(testState.cores[0]?.rpcCalls.some(call => call.method.startsWith('harness.api.'))).toBe(false)
+      } finally { spy?.mockRestore(); await connection.close() }
+    } })))
   })
 
   it('uses v0.1.2 Typert Remote without opening the ApiProxy mux', async () => {

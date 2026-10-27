@@ -14,7 +14,7 @@
 - hello/hello.ack 的版本拒绝、capability 协商与 limits。
 - Account authorization、Host 注册码、设备注册/刷新与 Browser 授权交换。
 - Connect、Noise 握手 forwarding、Relay、Signaling、Error 和关闭状态。
-- Harness ApiProxy / Typert tunnel、事件及有界 transfer。
+- Harness Typert tunnel、事件及有界 transfer。
 - CodeX / ACP 独立 RPC、stream、transfer、capability 和工作区类型。
 - 原生只读文件、终端输入权、loopback 固定目标限制，以及各领域工具 scope。
 

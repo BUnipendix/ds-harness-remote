@@ -258,6 +258,7 @@ describe('capability constants', () => {
       'harness.remote.v1',
       'harness.remote.v3',
       'harness.remote.transfer.v1',
+      'harness.remote.stream.transfer.v1',
       'fileviewer.read.v1',
       'codex.appserver.v1',
       'codex.appserver.transfer.v1',

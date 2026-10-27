@@ -207,6 +207,7 @@ describe('AdaptiveTransport capability negotiation', () => {
         if (rtc !== undefined) (rtc.channel as unknown as { onclose: () => void }).onclose()
         if (reason === 'local-close') await transport.close()
         expect(closed).toHaveBeenCalledOnce()
+        if (reason === 'control-closed') expect(closed).toHaveBeenCalledWith(expect.objectContaining({ code: 'CONNECTION_REPLACED', retryable: false }))
         expect(transport.getStats().connected).toBe(false)
         if (reason === 'local-close') expect(diagnostic).not.toHaveBeenCalled()
         else expect(diagnostic.mock.calls).toEqual([[{

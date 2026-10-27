@@ -4,7 +4,7 @@ import type { RemoteFileContentProvider } from '../remote-file-content-provider.
 export interface ControlResult<T = unknown> {
   ok: boolean
   value?: T
-  error?: { message?: string }
+  error?: { code?: string; message?: string; details?: Record<string, unknown> }
 }
 
 export interface FileViewerClientServiceLike {
@@ -24,6 +24,7 @@ export interface RemoteStatus {
   deviceId?: string
   serverUrl?: string
   connected?: boolean
+  recoveryGeneration?: number
   connectedTargetDeviceId?: string
   transport?: 'LAN' | 'P2P' | 'TURN' | 'Relay' | 'Disconnected'
   preferredTransports?: RemoteTransportPreference[]

@@ -1,6 +1,5 @@
 import * as DshConnection from '@deepseek-ai/dsh-client-connection'
 import type { Context } from '@deepseek-ai/cordis'
-import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy/api'
 // Type-only: pulls the `ctx.settings` Context merge and the rc.1 forms type.
 import type { SettingsForms } from '@deepseek-ai/dsh-settings'
 import { ClientModeRuntime, type HostConnectionHandle } from './client-runtime.js'
@@ -25,6 +24,7 @@ import { subprocessTerminalSpawner, type HostSubprocessLike } from './codex-work
 import { TypertGatewaySwitch } from './typert-gateway-switch.js'
 import type { FileViewerHostServiceLike } from './file-viewer-bridge.js'
 import { createPluginRouteDispatcher, type PluginRouteConnectionLike } from './plugin-route-dispatcher.js'
+import { installRemoteDiscoveryTools } from './remote-tools.js'
 import {
   installTuiRemoteCommand,
   type TuiRemoteBinding,
@@ -119,8 +119,8 @@ export function apply(ctx: Context, entry: EntryConfig | ConfigShape | undefined
   if (tuiBinding !== undefined) installTuiRemoteCommand(ctx, () => tuiBinding.target)
 
   // A terminal-only dsh-TUI profile has no browser `connection` service.
-  // Its rc.2 Gateway also has no stream carrier or ApiProxy, but the Host
-  // control plane and `/remote` account commands remain useful. Desktop
+  // A Gateway without a stream carrier still supports the Host
+  // control plane and `/remote` account commands. Desktop
   // profiles still wait for one complete official Harness carrier.
   const activateWhenCarrierReady = (runtimeContext: Context): void | Promise<void> => {
     const gateway = runtimeContext.get('typertGateway') as TypertGatewayLike
@@ -147,13 +147,11 @@ export function apply(ctx: Context, entry: EntryConfig | ConfigShape | undefined
     }
     if (
       tuiCommandsAvailable
-      || runtimeContext.get('apiProxy') !== undefined
       || new TypertGatewaySwitch(gateway).supportsCarrier()
     ) {
       return startActiveRuntime(runtimeContext)
     }
     installPendingControl()
-    runtimeContext.inject(['apiProxy'], legacyContext => startActiveRuntime(legacyContext))
   }
 
   if (tuiCommandsAvailable) {
@@ -198,7 +196,6 @@ async function activate(
     warn: message => { ctx.logger.warn(message); console.warn(message) },
     error: message => { ctx.logger.error(message); console.error(message) },
   }, config.logLevel)
-  const apiProxy = ctx.get('apiProxy') as ApiProxy | undefined
   // The official Typert gateway (`typertGateway` from dsh-api-gateway) is the
   // dispatch path behind `/api/commands/*` on the host. It is an explicit
   // activation dependency so a peer bridge never silently omits commands.
@@ -235,7 +232,6 @@ async function activate(
     const runtime = new HostPluginRuntime(
       config,
       hostIdentities,
-      apiProxy,
       logger,
       localTypertGateway,
       () => ctx.get('fileViewerHost') as FileViewerHostServiceLike | undefined,
@@ -256,7 +252,6 @@ async function activate(
         config,
         clientIdentities,
         new ClientServerApi(config.serverUrl, new ServerCredentialStore(clientIdentities.directory)),
-        apiProxy,
         nativeTypertGateway,
         logger,
         runtime,
@@ -325,7 +320,6 @@ async function activate(
         } else {
           logger.warn('client remote mode is unavailable', {
             serverConfigured: config.serverUrl !== undefined,
-            apiProxyAvailable: apiProxy !== undefined,
             remoteGatewayAvailable: localTypertGateway.supportsCarrier,
             connectionAvailable: connection !== undefined,
           })
@@ -348,6 +342,7 @@ async function activate(
       await runtime.close()
     }
   }, 'dsh-remote lifecycle')
+  installRemoteDiscoveryTools(ctx, () => closed ? undefined : clientRuntime)
 }
 
 /**
@@ -514,13 +509,10 @@ export { ServerCredentialStore, ServerCredentialsInvalidError } from './server-c
 export type { ServerCredentials } from './server-credentials.js'
 export { HOST_CAPABILITIES, RpcError, RpcRouter } from './rpc-router.js'
 export { HostPluginRuntime } from './service.js'
-export { ApiProxySwitch } from './api-proxy-switch.js'
 export { ClientModeError, ClientModeRuntime } from './client-runtime.js'
 export { PluginControlRuntime } from './control-runtime.js'
 export { ClientSecureTransport } from './client-secure-transport.js'
-export { HARNESS_API_ALLOWLIST, HarnessApiBridge } from './harness-api-bridge.js'
 export { HARNESS_REMOTE_ALLOWLIST, HarnessRemoteBridge } from './harness-remote-bridge.js'
-export { RemoteHarnessApiProxy } from './remote-api-proxy.js'
 export { RemoteTypertGateway } from './remote-typert-gateway.js'
 export { RemoteFileViewerBridge } from './file-viewer-bridge.js'
 export { CodexRemoteDomain } from './codex/domain.js'

@@ -1,6 +1,6 @@
 import { hostname } from 'node:os'
 import { execFileSync } from 'node:child_process'
-import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
+import type { ControlResult } from './control-result.js'
 import { resolveConfig, type Config, type ConfigInput, type ResolvedConfig } from './config.js'
 import {
   ClientModeError,
@@ -85,7 +85,7 @@ export class PluginControlRuntime {
     return result.value
   }
 
-  private async handle(endpoint: string, payload: unknown, signal: AbortSignal): Promise<RpcResult<unknown>> {
+  private async handle(endpoint: string, payload: unknown, signal: AbortSignal): Promise<ControlResult<unknown>> {
     try {
       // A request arriving during replacement must use the new Server runtime.
       if (endpoint !== 'settings.server.set') await this.serverSwitchFlight
@@ -507,9 +507,9 @@ function record(value: unknown): Record<string, unknown> {
   return value
 }
 
-function ok(value: unknown): RpcResult<unknown> { return { ok: true, value } }
+function ok(value: unknown): ControlResult<unknown> { return { ok: true, value } }
 
-function fail(error: unknown): RpcResult<unknown> {
+function fail(error: unknown): ControlResult<unknown> {
   const source = error instanceof Error ? error : undefined
   const remoteCode = source !== undefined && 'code' in source && typeof source.code === 'string'
     ? source.code

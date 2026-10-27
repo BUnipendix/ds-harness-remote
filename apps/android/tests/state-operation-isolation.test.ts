@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   storage: Object.fromEntries([
     'loadTrustedHosts', 'forgetHost', 'clearCodexPermissionPresets', 'clearDeviceCredentials',
     'saveServerConfig', 'clearLocalData', 'loadOrCreateIdentity', 'saveLanguagePreference',
-    'saveCompactHistory', 'saveThemePreference', 'saveStatusBarVisible', 'saveDefaultPermissionPreset', 'saveFavoriteWorkspaces',
+    'saveCompactHistory', 'saveThemePreference', 'saveTypographyDensity', 'loadTypographyDensity', 'saveStatusBarVisible', 'saveDefaultPermissionPreset', 'saveFavoriteWorkspaces',
     'saveRecentWorkspaces', 'loadCodexPermissionPresets', 'clearLastConnectedDeviceId',
   ].map(name => [name, vi.fn()])),
   createCodex: vi.fn(), loadCodex: vi.fn(), loadAgy: vi.fn(), loadPi: vi.fn(), loadOpencode: vi.fn(), loadClaude: vi.fn(),
@@ -22,7 +22,7 @@ vi.mock('../src/services/login', () => ({
   loginFlow: { createContext: mocks.createContext, signInWith: mocks.signInWith },
   passwordLoginChannel: { busyAction: 'login' },
 }))
-vi.mock('../src/services/api-proxy', () => ({ createNativeRpcId: () => 'test-rpc' }))
+vi.mock('../src/services/rpc-id', () => ({ createNativeRpcId: () => 'test-rpc' }))
 vi.mock('../src/services/codex', async importOriginal => ({
   ...await importOriginal<typeof import('../src/services/codex')>(),
   createCodexWorkspace: mocks.createCodex, loadCodexCatalog: mocks.loadCodex,

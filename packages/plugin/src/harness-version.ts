@@ -2,7 +2,6 @@ import { readFile, realpath as realpathEntrypoint } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join } from 'node:path'
 
-const LEGACY_PLACEHOLDER_VERSION = '0.0.1'
 const HARNESS_PACKAGE_NAME = '@deepseek-ai/dsh'
 
 export type HarnessSessionGeneration = 'legacy' | 'v3'
@@ -12,14 +11,6 @@ export function normalizeHarnessVersion(value: unknown): string | undefined {
   const version = value.trim()
   if (version.length === 0 || version.length > 64 || /[\u0000-\u001f]/u.test(version)) return undefined
   return version
-}
-
-export function selectHarnessVersion(
-  reportedVersion: string | undefined,
-  distributionVersion: string | undefined,
-): string | undefined {
-  if (reportedVersion !== undefined && reportedVersion !== LEGACY_PLACEHOLDER_VERSION) return reportedVersion
-  return distributionVersion
 }
 
 /**

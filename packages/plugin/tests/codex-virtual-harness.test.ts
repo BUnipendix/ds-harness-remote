@@ -131,8 +131,8 @@ describe('CodexVirtualHarness', () => {
     await emptyTarget.close()
   })
 
-  it('hydrates read-only permission snapshots in both carriers and clears unsupported live policies', async () => {
-    for (const carrier of ['api', 'typert']) {
+  it('hydrates read-only permission snapshots through Typert history and follow and clears unsupported live policies', async () => {
+    for (const carrier of ['history', 'follow']) {
       const client = fakeCodex()
       const request = client.request.getMockImplementation()!
       client.request.mockImplementation(async (method: string, params: unknown, signal?: AbortSignal) => {
@@ -142,13 +142,14 @@ describe('CodexVirtualHarness', () => {
       const target = new CodexVirtualHarness(client, { deviceId: 'host-1', name: 'Host' })
       const signal = new AbortController().signal
       let stream: AsyncIterator<unknown> | undefined
-      if (carrier === 'api') {
+      if (carrier === 'history') {
         expect(await target.dispatch('session/history', { args: { request: { sessionId: 'codex:thr_1' } } }, signal))
           .toMatchObject({ value: { projections: { values: { permissions: { currentValue: 'danger-full-access' } } } } })
       } else {
         stream = (await target.open('session/follow', { args: { request: { address: { kind: 'session', sessionId: 'codex:thr_1' } } } }, signal))[Symbol.asyncIterator]()
         expect(await stream.next()).toMatchObject({ value: { projections: { values: { permissions: { currentValue: 'danger-full-access' } } } } })
       }
+      stream ??= (await target.open('session/follow', { args: { request: { address: { kind: 'session', sessionId: 'codex:thr_1' } } } }, signal))[Symbol.asyncIterator]()
       expect(client.request.mock.calls.some(([method]) => method === 'thread/resume')).toBe(false)
       client.emit('thr_1', { method: 'thread/settings/updated', params: { threadSettings: {
         approvalPolicy: 'never', sandboxPolicy: { type: 'readOnly' },
@@ -234,6 +235,27 @@ describe('CodexVirtualHarness', () => {
     ] } })
     expect(JSON.stringify(sessions)).not.toContain('codex:thr_2')
     await target.close()
+  })
+
+  it('reopens Typert follows after the Host closes the CodeX stream without reviving the old subscriber', async () => {
+    await runScenarios(['legacy', 'v3'].map(generation => ({ name: generation, run: async () => {
+      const client = fakeCodex()
+      const target = new CodexVirtualHarness(client, { deviceId: 'host-1', name: 'Host' }, generation as 'legacy' | 'v3')
+      const controller = new AbortController()
+      const payload = { args: { request: { address: { kind: 'session', sessionId: 'codex:thr_1' } } } }
+      try {
+        const first = (await target.open('session/follow', payload, controller.signal))[Symbol.asyncIterator]()
+        expect((await first.next()).done).toBe(false)
+        client.closeStream('thr_1', 'failed')
+        expect((await first.next()).done).toBe(true)
+        const second = (await target.open('session/follow', payload, controller.signal))[Symbol.asyncIterator]()
+        expect((await second.next()).done).toBe(false)
+        expect(client.subscribe).toHaveBeenCalledTimes(2)
+        client.emit('thr_1', { method: 'turn/started', params: { turn: { id: 'turn_recovered', status: 'inProgress', items: [] } } })
+        expect((await second.next()).value).toMatchObject({ type: 'event', event: { type: 'turn/start' } })
+        expect((await first.next()).done).toBe(true)
+      } finally { controller.abort(); await target.close() }
+    } })))
   })
 
   it('projects persisted CodeX history and live frames into native session events', async () => {
@@ -371,14 +393,11 @@ describe('CodexVirtualHarness', () => {
     }])
     const target = new CodexVirtualHarness(client, { deviceId: 'host-1', name: 'Host' })
 
-    const history = await target.api.sessions.history({
-      rpcId: 'history-image' as never,
-      payload: { sessionId: 'codex:thr_image' as never },
-    })
+    const history = await target.dispatch('session/history', { args: { request: { sessionId: 'codex:thr_image' as never } } }, new AbortController().signal)
 
-    expect(history.result.ok).toBe(true)
-    if (!history.result.ok) throw new Error('history failed')
-    const message = history.result.value.events.find(entry => entry.event.type === 'user/message')!.event.data as {
+    expect(history.ok).toBe(true)
+    if (!history.ok) throw new Error('history failed')
+    const message = (history.value as { events: Array<{ event: { type: string; seq: number; data: unknown } }> }).events.find(entry => entry.event.type === 'user/message')!.event.data as {
       content: Array<{ type: string; attachment?: { attachmentId?: string }; data?: string; url?: string; name?: string }>
     }
     expect(message.content).toMatchObject([
@@ -394,7 +413,7 @@ describe('CodexVirtualHarness', () => {
     ])
     expect(JSON.stringify(message)).not.toContain('example.test')
 
-    const assistant = history.result.value.events.find(entry => entry.event.type === 'assistant/message')!.event.data as {
+    const assistant = (history.value as { events: Array<{ event: { type: string; seq: number; data: unknown } }> }).events.find(entry => entry.event.type === 'assistant/message')!.event.data as {
       message: { content: Array<{ type: string; attachment?: { attachmentId?: string }; data?: string; name?: string }> }
     }
     expect(assistant.message.content).toMatchObject([
@@ -409,11 +428,8 @@ describe('CodexVirtualHarness', () => {
     ])
 
     const attachmentId = message.content[1]!.attachment!.attachmentId!
-    const attachment = await target.api.sessions.attachment({
-      rpcId: 'attachment-image' as never,
-      payload: { sessionId: 'codex:thr_image' as never, attachmentId: attachmentId as never },
-    })
-    expect(attachment.result).toMatchObject({
+    const attachment = await target.dispatch('session/attachment', { args: { request: { sessionId: 'codex:thr_image' as never, attachmentId: attachmentId as never } } }, new AbortController().signal)
+    expect(attachment).toMatchObject({
       ok: true,
       value: {
         attachment: { attachmentId, mediaType: 'image/png', name: 'screen.png' },
@@ -421,16 +437,13 @@ describe('CodexVirtualHarness', () => {
       },
     })
     const toolAttachmentId = assistant.message.content[1]!.attachment!.attachmentId!
-    await expect(target.api.sessions.attachment({
-      rpcId: 'attachment-tool-image' as never,
-      payload: { sessionId: 'codex:thr_image' as never, attachmentId: toolAttachmentId as never },
-    })).resolves.toMatchObject({ result: {
+    await expect(target.dispatch('session/attachment', { args: { request: { sessionId: 'codex:thr_image' as never, attachmentId: toolAttachmentId as never } } }, new AbortController().signal)).resolves.toMatchObject({
       ok: true,
       value: {
         attachment: { attachmentId: toolAttachmentId, mediaType: 'image/png', name: 'current-browser.png' },
         data: imageData,
       },
-    } })
+    })
     await target.close()
   })
 
@@ -719,6 +732,7 @@ describe('CodexVirtualHarness', () => {
             },
             new AbortController().signal,
           )
+          await target.open('session/follow', { args: { request: { address: { kind: 'session', sessionId: 'codex:thr_active' } } } }, new AbortController().signal)
           await expect(
             target.dispatch(
               'session/cancel',
@@ -750,13 +764,10 @@ describe('CodexVirtualHarness', () => {
         run: async () => {
           const client = fakeCodex()
           const target = new CodexVirtualHarness(client, { deviceId: 'host-1', name: 'Host' })
-          const tail = await target.api.sessions.history({
-            rpcId: 'history-tail' as never,
-            payload: { sessionId: 'codex:thr_1' as never, maxMessages: 3 },
-          })
-          expect(tail.result).toMatchObject({ ok: true, value: { hasMore: true } })
-          if (!tail.result.ok) throw new Error('tail history failed')
-          expect(tail.result.value.events.map((entry) => entry.event.seq)).toEqual([3, 4, 5, 6, 7, 8, 9])
+          const tail = await target.dispatch('session/history', { args: { request: { sessionId: 'codex:thr_1' as never, maxMessages: 3 } } }, new AbortController().signal)
+          expect(tail).toMatchObject({ ok: true, value: { hasMore: true } })
+          if (!tail.ok) throw new Error('tail history failed')
+          expect((tail.value as { events: Array<{ event: { type: string; seq: number; data: unknown } }> }).events.map((entry) => entry.event.seq)).toEqual([3, 4, 5, 6, 7, 8, 9])
 
           const older = await target.dispatch(
             'session/page',
@@ -801,14 +812,11 @@ describe('CodexVirtualHarness', () => {
           )
           const target = new CodexVirtualHarness(client, { deviceId: 'host-1', name: 'Host' })
 
-          const history = await target.api.sessions.history({
-            rpcId: 'history-legacy' as never,
-            payload: { sessionId: 'codex:thr_1' as never, maxMessages: 3 },
-          })
+          const history = await target.dispatch('session/history', { args: { request: { sessionId: 'codex:thr_1' as never, maxMessages: 3 } } }, new AbortController().signal)
 
-          expect(history.result).toMatchObject({ ok: true, value: { hasMore: true } })
-          if (!history.result.ok) throw new Error('history failed')
-          expect(history.result.value.events.map((entry) => entry.event.seq)).toEqual([3, 4, 5, 6, 7, 8, 9])
+          expect(history).toMatchObject({ ok: true, value: { hasMore: true } })
+          if (!history.ok) throw new Error('history failed')
+          expect((history.value as { events: Array<{ event: { type: string; seq: number; data: unknown } }> }).events.map((entry) => entry.event.seq)).toEqual([3, 4, 5, 6, 7, 8, 9])
           expect(client.request).toHaveBeenCalledWith(
             'thread/read',
             { threadId: 'thr_1', includeTurns: true },
@@ -847,11 +855,8 @@ describe('CodexVirtualHarness', () => {
           }, new AbortController().signal)
           expect(created).toEqual({ ok: true, value: { sessionId: 'codex:new_1' } })
 
-          const history = await target.api.sessions.history({
-            rpcId: 'history-blank' as never,
-            payload: { sessionId: 'codex:new_1' as never },
-          })
-          expect(history.result).toMatchObject({
+          const history = await target.dispatch('session/history', { args: { request: { sessionId: 'codex:new_1' as never } } }, new AbortController().signal)
+          expect(history).toMatchObject({
             ok: true,
             value: {
               events: [],
@@ -939,129 +944,6 @@ describe('CodexVirtualHarness', () => {
     await target.close()
   })
 
-  it('attaches and restores rc.2 live follow subscriptions', async () => {
-    await runScenarios([
-      {
-        name: 'attaches rc.2 live updates when the native client reads session history',
-        run: async () => {
-          const client = fakeCodex()
-          const target = new CodexVirtualHarness(client, { deviceId: 'host-1', name: 'Host' })
-          const controller = new AbortController()
-          const iterator = target.api.events
-            .mux({ rpcId: 'mux-1' as never, payload: {} }, controller.signal)
-            [Symbol.asyncIterator]()
-
-          await expect(iterator.next()).resolves.toMatchObject({
-            value: { payload: { type: 'session/subscribed', sessionId: 'codex:thr_1' } },
-          })
-          const history = await target.api.sessions.history({
-            rpcId: 'history-1' as never,
-            payload: { sessionId: 'codex:thr_1' as never },
-          })
-          expect(history.result.ok).toBe(true)
-          if (!history.result.ok) throw new Error('history failed')
-          const events = history.result.value.events
-          expect(events[2]).toMatchObject({ event: { type: 'user/message', surfaceOp: 'append' } })
-          expect(events[3]).toMatchObject({ event: { type: 'assistant/message', surfaceOp: 'append' } })
-          expect(events[4]).toMatchObject({ view: { for: 'call', view: { card: 'terminal' } } })
-
-          client.emit('thr_1', {
-            method: 'turn/started',
-            params: { turn: { id: 'turn_2', status: 'inProgress', items: [] } },
-          })
-          await expect(iterator.next()).resolves.toMatchObject({
-            value: {
-              payload: {
-                type: 'session/event',
-                sessionId: 'codex:thr_1',
-                event: { type: 'turn/start', seq: 10 },
-              },
-            },
-          })
-          await expect(iterator.next()).resolves.toMatchObject({
-            value: { payload: { type: 'session/event', event: { type: 'step/start', seq: 11 } } },
-          })
-          client.emit('thr_1', {
-            method: 'item/started',
-            params: {
-              turnId: 'turn_2',
-              item: {
-                id: 'command_2',
-                type: 'commandExecution',
-                command: 'pnpm test',
-                status: 'inProgress',
-              },
-            },
-          })
-          await expect(iterator.next()).resolves.toMatchObject({
-            value: {
-              payload: {
-                type: 'session/event',
-                event: { type: 'tool/call', seq: 12 },
-              },
-            },
-          })
-          client.emit('thr_1', {
-            method: 'item/commandExecution/outputDelta',
-            params: { turnId: 'turn_2', itemId: 'command_2', delta: 'one' },
-          })
-          const firstResult = await iterator.next()
-          expect(firstResult.value).toMatchObject({
-            payload: {
-              type: 'session/event',
-              event: { type: 'tool/result', seq: 13, surfaceOp: 'append' },
-            },
-          })
-          client.emit('thr_1', {
-            method: 'item/commandExecution/outputDelta',
-            params: { turnId: 'turn_2', itemId: 'command_2', delta: ' two' },
-          })
-          await expect(iterator.next()).resolves.toMatchObject({
-            value: {
-              payload: {
-                type: 'session/event',
-                event: {
-                  type: 'tool/result',
-                  seq: 14,
-                  surfaceOp: { op: 'replace', start: 13, end: 13 },
-                  sourceEventSeqs: [13],
-                },
-              },
-            },
-          })
-
-          controller.abort()
-          await iterator.return?.()
-          await target.close()
-        },
-      },
-      {
-        name: 'reopens rc.2 live follow after the Host closes a CodeX stream',
-        run: async () => {
-          const client = fakeCodex()
-          const target = new CodexVirtualHarness(client, { deviceId: 'host-1', name: 'Host' })
-
-          const first = await target.api.sessions.history({
-            rpcId: 'history-1' as never,
-            payload: { sessionId: 'codex:thr_1' as never },
-          })
-          expect(first.result.ok).toBe(true)
-          expect(client.subscribe).toHaveBeenCalledTimes(1)
-
-          client.closeStream('thr_1', 'failed')
-
-          const second = await target.api.sessions.history({
-            rpcId: 'history-2' as never,
-            payload: { sessionId: 'codex:thr_1' as never },
-          })
-          expect(second.result.ok).toBe(true)
-          expect(client.subscribe).toHaveBeenCalledTimes(2)
-          await target.close()
-        },
-      },
-    ])
-  }, 10000)
-
   it('restores catalog sessions without busy-read probes or cross-workspace navigation', async () => {
     await runScenarios([
       { name: 'restores the most recent running thread even without a title', preferred: undefined, expected: 'codex:latest' },
@@ -1120,21 +1002,21 @@ describe('CodexVirtualHarness', () => {
           if (mode === 'follow') {
             await target.open('session/follow', { args: { request: { address: { kind: 'session', sessionId: 'codex:older' } } } }, controller.signal)
           } else {
-            const response = await target.api.sessions.history({ rpcId: 'open' as never, payload: { sessionId: 'codex:older' as never } })
-            expect(response.result.ok).toBe(true)
+            const response = await target.dispatch('session/history', { args: { request: { sessionId: 'codex:older' as never } } }, new AbortController().signal)
+            expect(response.ok).toBe(true)
           }
           expect(target.openedSessionId).toBe('codex:older')
           await expect(target.preferredSessionId()).resolves.toBe('codex:older')
-          const page = await target.api.sessions.history({ rpcId: 'page' as never, payload: { sessionId: 'codex:thr_1' as never, beforeSeq: 3 } })
-          expect(page.result.ok).toBe(true)
+          const page = await target.dispatch('session/history', { args: { request: { sessionId: 'codex:thr_1' as never, beforeSeq: 3 } } }, new AbortController().signal)
+          expect(page.ok).toBe(true)
           expect(target.openedSessionId).toBe('codex:older')
           const original = client.request.getMockImplementation()!
           client.request.mockImplementation(async (method, params) => {
             if (method === 'dsh/sessionHistory') throw new Error('history temporarily unavailable')
             return original(method, params)
           })
-          const failed = await target.api.sessions.history({ rpcId: 'failed' as never, payload: { sessionId: 'codex:thr_1' as never } })
-          expect(failed.result.ok).toBe(false)
+          const failed = await target.dispatch('session/history', { args: { request: { sessionId: 'codex:thr_1' as never } } }, new AbortController().signal)
+          expect(failed.ok).toBe(false)
           expect(target.openedSessionId).toBe('codex:older')
         } finally {
           controller.abort()

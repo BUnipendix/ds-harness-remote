@@ -4,7 +4,7 @@ export interface RemoteTransport {
   connect(): Promise<void>
   send(data: Uint8Array): Promise<void>
   onMessage(cb: (data: Uint8Array) => void): () => void
-  onClose?(cb: () => void): () => void
+  onClose?(cb: (error?: Error) => void): () => void
   close(): Promise<void>
   getStats(): TransportStats
 }
@@ -19,14 +19,14 @@ type MessageHandler = (data: Uint8Array) => void
 
 export abstract class BaseTransport implements RemoteTransport {
   protected handlers = new Set<MessageHandler>()
-  protected closeHandlers = new Set<() => void>()
+  protected closeHandlers = new Set<(error?: Error) => void>()
 
   onMessage(cb: MessageHandler): () => void {
     this.handlers.add(cb)
     return () => this.handlers.delete(cb)
   }
 
-  onClose(cb: () => void): () => void {
+  onClose(cb: (error?: Error) => void): () => void {
     this.closeHandlers.add(cb)
     return () => this.closeHandlers.delete(cb)
   }
@@ -35,8 +35,8 @@ export abstract class BaseTransport implements RemoteTransport {
     for (const handler of this.handlers) handler(data)
   }
 
-  protected emitClose(): void {
-    for (const handler of this.closeHandlers) handler()
+  protected emitClose(error?: Error): void {
+    for (const handler of this.closeHandlers) handler(error)
   }
 
   abstract connect(): Promise<void>

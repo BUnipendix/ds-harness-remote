@@ -4,7 +4,7 @@ import { HostConnectionService } from '@deepseek-ai/dsh-client-connection'
 import type { RemoteClientCore } from '@dsh-remote/client-core'
 import { runScenarios } from '../../../scripts/test-scenarios.mjs'
 import { RemoteTypertGateway } from '../src/remote-typert-gateway.js'
-import type { TypertGatewayLike } from '../src/harness-api-bridge.js'
+import type { TypertGatewayLike } from '../src/typert-gateway-contract.js'
 import { TypertGatewaySwitch } from '../src/typert-gateway-switch.js'
 
 describe('TypertGatewaySwitch', () => {

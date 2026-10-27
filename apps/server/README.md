@@ -23,6 +23,20 @@ If an older image fails to resolve `@dsh-remote/protocol`, update the source and
 
 The GitHub Tag workflow builds the production image. Put an HTTPS reverse proxy in front of it instead of exposing the Node listener directly to the public internet.
 
+### Blank page or static assets returning 403
+
+`DSH_SERVER_PUBLIC_URL` must match the browser-facing origin, including `http` / `https`, hostname, and any non-default port. Do not use the internal container address or a page path. For access through `https://remote.example.com`, set this in `.env`:
+
+```dotenv
+DSH_SERVER_PUBLIC_URL=https://remote.example.com
+```
+
+Apply it with `docker compose up -d --force-recreate server`; `docker compose restart` does not update environment variables. Add `--no-build` when using a prebuilt image. Keep the existing data volume; do not run `down -v`.
+
+If JS/CSS returns 403 with `AUTH_INVALID` in the JSON response, compare this setting with the request's `Origin`. The Server checks origins before serving static assets, so the HTML may load while JS/CSS is rejected. The browser then reports an `application/json` MIME error and displays a blank page. Do not change MIME types or remove origin checks to bypass this. If the response comes from the reverse proxy, check its access rules; preserve the browser's original `Origin` header.
+
+For protocol entry-resolution errors during Docker source builds, also inspect source permissions (`ls -ld packages/protocol packages/protocol/package.json`). The image normalizes read/directory-traversal permissions on published files and checks module loading as the final `node` user.
+
 ## Local setup
 
 Requires Node.js 22 and pnpm 9.15.4. From the repository root:

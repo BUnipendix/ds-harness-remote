@@ -4,7 +4,7 @@ import { workspaceStableKey } from '../lib/workspace-key'
 import { getVisibleWorkspaceSessions } from '../lib/workspace-sessions'
 import { strings as zhCN } from '../locales/i18n'
 import { loadAntigravityCatalog, mergeAntigravityCatalog } from '../services/antigravity'
-import { createNativeRpcId } from '../services/api-proxy'
+import { createNativeRpcId } from '../services/rpc-id'
 import { createCodexWorkspace, loadCodexCatalog } from '../services/codex'
 import {
   createAntigravityWorkspace,

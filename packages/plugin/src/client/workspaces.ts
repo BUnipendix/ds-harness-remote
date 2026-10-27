@@ -28,6 +28,7 @@ export function createRemoteWorkspaceAction(React: ClientReact) {
     wide: boolean
     control: <T>(endpoint: string, payload?: unknown) => Promise<T>
     statusFeed: StatusFeed<RemoteStatus>
+    subscribeOpen: (listener: () => void) => () => void
     preferredQrProvider: OAuthProvider
     t: Translate
   }): unknown {
@@ -78,10 +79,13 @@ export function createRemoteWorkspaceAction(React: ClientReact) {
     const opencodeWorkspaceListId = 'dsh-remote-opencode-workspace-list'
     const claudeWorkspaceListId = 'dsh-remote-claude-workspace-list'
     const [busy, setBusy] = React.useState(false)
-    const [needsAuthorization, setNeedsAuthorization] = React.useState(false)
+    // Remain undecided until local credentials or an explicit auth rejection
+    // establish that login is required. Network failures are not sign-outs.
+    const [needsAuthorization, setNeedsAuthorization] = React.useState<boolean | undefined>(undefined)
     const [email, setEmail] = React.useState('')
     const [password, setPassword] = React.useState('')
     const [loginServerUrl, setLoginServerUrl] = React.useState('https://dsh.r2049.cn')
+    const [editingServer, setEditingServer] = React.useState(false)
     const [savingServer, setSavingServer] = React.useState(false)
     const serverDirty = loginServerUrl.trim() !== (status?.serverUrl ?? '')
     const [loginMethod, setLoginMethod] = React.useState<LoginMethod>('password')
@@ -488,6 +492,11 @@ export function createRemoteWorkspaceAction(React: ClientReact) {
           return
         }
         try {
+          const authorization = await props.control<{ hasCredentials: boolean }>('client.authorization.status')
+          if (!authorization.hasCredentials) {
+            throw Object.assign(new Error('Remote account authorization is required.'), { code: 'ACCOUNT_AUTH_REQUIRED' })
+          }
+          setNeedsAuthorization(previous => previous === true ? undefined : previous)
           const nextDevices = await props.control<RemoteDevice[]>('devices')
           setDevices(nextDevices)
           setNeedsAuthorization(false)
@@ -594,6 +603,8 @@ export function createRemoteWorkspaceAction(React: ClientReact) {
       await refreshRemote()
     }
 
+    React.useEffect(() => props.subscribeOpen(() => { void show() }), [props.subscribeOpen, show])
+
     React.useEffect(() => {
       // While the host picker lists Hosts, the pushed status keeps the Host
       // account line and the connection progress current; the subscription
@@ -661,6 +672,7 @@ export function createRemoteWorkspaceAction(React: ClientReact) {
         const nextStatus = await props.control<RemoteStatus>('status')
         setStatus(nextStatus)
         setLoginServerUrl(nextStatus.serverUrl ?? loginServerUrl.trim())
+        setEditingServer(false)
         setProviderReload(value => value + 1)
       } catch (reason) {
         setError(messageOf(reason))
@@ -972,27 +984,16 @@ export function createRemoteWorkspaceAction(React: ClientReact) {
             onClick: () => void openLocalWorkspaces(),
           }, t('openLocalWorkspaces')) : null,
           React.createElement(React.Fragment, null,
+            needsAuthorization === undefined && busy
+              ? React.createElement('p', null, t('checkingConnection')) : null,
             needsAuthorization ? React.createElement('section', { className: 'dshRemoteEnable' },
               React.createElement('div', { className: 'dshRemoteLoginHeading' },
-                React.createElement('strong', { className: 'dshRemoteLoginTitle' }, t('signInClient')),
-                React.createElement('span', null, t('signInClientDescription'))),
-              React.createElement('form', {
-                className: 'dshRemoteLoginServer',
-                onSubmit: (event: Event) => { event.preventDefault(); void saveLoginServer() },
-              },
-                React.createElement('label', { htmlFor: 'dsh-remote-login-server' }, t('serverUrl')),
-                React.createElement('div', null,
-                  React.createElement('input', {
-                    id: 'dsh-remote-login-server', type: 'url', required: true,
-                    value: loginServerUrl, disabled: busy || savingServer, autoComplete: 'url',
-                    placeholder: t('serverUrl'), onChange: (event: Event) => {
-                      resetLoginFlow()
-                      setLoginServerUrl((event.target as HTMLInputElement).value)
-                    },
-                  }),
-                  React.createElement('button', {
-                    type: 'submit', disabled: busy || savingServer || loginServerUrl.trim() === '',
-                  }, t(savingServer ? 'saving' : 'save')))),
+                React.createElement('a', {
+                  href: 'https://github.com/liguobao/ds-harness-remote',
+                  target: '_blank', rel: 'noopener noreferrer',
+                },
+                  React.createElement('strong', { className: 'dshRemoteLoginTitle' }, t('signInClient')),
+                  React.createElement('span', null, t('signInClientDescription')))),
               React.createElement('div', { className: 'dshRemoteLoginTabs', role: 'tablist' },
                 ...orderedQrProviders.map(qrLoginTab),
                 React.createElement('button', {
@@ -1026,10 +1027,6 @@ export function createRemoteWorkspaceAction(React: ClientReact) {
                       : null,
                   React.createElement('strong', null, scanLabel),
                   React.createElement('p', null, t('scanLoginHint')),
-                  status?.serverUrl === undefined ? null : React.createElement('p', { className: 'dshRemoteServiceAddress' },
-                    t('currentServiceAddress'), ' ', React.createElement('a', {
-                      href: status.serverUrl, target: '_blank', rel: 'noreferrer',
-                    }, status.serverUrl)),
                   qrExpired ? React.createElement('button', {
                     type: 'button', disabled: busy, onClick: () => setQrExpired(false),
                   }, t('refreshQrCode')) : null)
@@ -1045,8 +1042,48 @@ export function createRemoteWorkspaceAction(React: ClientReact) {
                     type: 'password', value: password, disabled: busy, autoComplete: 'current-password', placeholder: t('password'),
                     'aria-label': t('password'), onChange: (event: Event) => setPassword((event.target as HTMLInputElement).value),
                   }),
-                  React.createElement('button', { type: 'button', disabled: busy || savingServer || serverDirty || loginServerUrl.trim() === '' || email.trim() === '' || password === '', onClick: () => void signInClient() }, t(busy ? 'signingIn' : 'startSignIn')))) : null,
-            needsAuthorization ? null : React.createElement(React.Fragment, null,
+                  React.createElement('button', { type: 'button', disabled: busy || savingServer || serverDirty || loginServerUrl.trim() === '' || email.trim() === '' || password === '', onClick: () => void signInClient() }, t(busy ? 'signingIn' : 'startSignIn'))),
+              React.createElement('div', { className: 'dshRemoteServiceAddress' },
+                React.createElement('span', null, t('currentServiceAddress')),
+                editingServer
+                  ? React.createElement('form', {
+                    className: 'dshRemoteLoginServer',
+                    onSubmit: (event: Event) => { event.preventDefault(); void saveLoginServer() },
+                  },
+                    React.createElement('input', {
+                      id: 'dsh-remote-login-server', type: 'url', required: true,
+                      'aria-label': t('serverUrl'), value: loginServerUrl,
+                      disabled: busy || savingServer, autoComplete: 'url',
+                      placeholder: t('serverUrl'), onChange: (event: Event) => {
+                        resetLoginFlow()
+                        setLoginServerUrl((event.target as HTMLInputElement).value)
+                      },
+                    }),
+                    React.createElement('button', {
+                      type: 'submit', disabled: busy || savingServer || loginServerUrl.trim() === '',
+                    }, t(savingServer ? 'saving' : 'save')),
+                    React.createElement('button', {
+                      type: 'button', disabled: busy || savingServer,
+                      onClick: () => {
+                        setLoginServerUrl(status?.serverUrl ?? 'https://dsh.r2049.cn')
+                        setEditingServer(false)
+                      },
+                    }, t('cancelServiceAddressEdit')))
+                  : React.createElement(React.Fragment, null,
+                    React.createElement('a', {
+                      href: status?.serverUrl ?? loginServerUrl, target: '_blank', rel: 'noreferrer',
+                    }, status?.serverUrl ?? loginServerUrl),
+                    React.createElement('button', {
+                      type: 'button', className: 'dshRemoteServiceAddressEdit',
+                      disabled: busy || savingServer,
+                      title: t('editServiceAddress'), 'aria-label': t('editServiceAddress'),
+                      onClick: () => setEditingServer(true),
+                    }, React.createElement('svg', {
+                      viewBox: '0 0 24 24', width: 16, height: 16, fill: 'none',
+                      stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round',
+                      'aria-hidden': true,
+                    }, React.createElement('path', { d: 'M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4L16.5 3.5Z' })))))) : null,
+            needsAuthorization !== false ? null : React.createElement(React.Fragment, null,
               selectedHost === undefined ? React.createElement('section', { className: 'dshRemoteHosts', 'aria-label': t('chooseHost') },
                 React.createElement('div', { className: 'dshRemoteSectionHeading' },
                   React.createElement('div', { className: 'dshRemoteSectionTitle' },
@@ -1064,7 +1101,7 @@ export function createRemoteWorkspaceAction(React: ClientReact) {
                   className: `dshRemoteHostList${connectingHost === undefined ? '' : ' isCollapsed'}`,
                   'aria-busy': connectingHost === undefined ? undefined : true,
                 }, listedHosts.length === 0
-                  ? React.createElement('p', null, busy ? t('checkingConnection') : t('noRemoteHosts'))
+                  ? (error !== undefined ? null : React.createElement('p', null, busy ? t('checkingConnection') : t('noRemoteHosts')))
                   : listedHosts.map(device => React.createElement('button', {
                     type: 'button',
                     key: device.deviceId,
@@ -1138,8 +1175,8 @@ export function createRemoteWorkspaceAction(React: ClientReact) {
                               type: 'button', key: entry.path, disabled: busy, onClick: () => void browseDirectory(entry.path),
                             }, React.createElement('span', { 'aria-hidden': true }, '▱'), React.createElement('span', null, entry.name)))),
                           directory.truncated ? React.createElement('small', null, t('directoryTruncated')) : null))
-                    : React.createElement(React.Fragment, null,
-                      React.createElement('div', { className: 'dshRemoteWorkspaceLists' },
+                    : React.createElement('div', { className: 'dshRemoteWorkspaceLists' },
+                      React.createElement(React.Fragment, null,
                         React.createElement('div', { id: workspaceListId, className: 'dshRemoteDirectoryList' }, workspaces.length === 0
                           ? React.createElement('p', null, t('noRemoteWorkspaces'))
                           : visibleWorkspaces.map(workspace => React.createElement('button', {

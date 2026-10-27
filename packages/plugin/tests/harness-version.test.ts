@@ -2,18 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   harnessSessionGeneration,
   normalizeHarnessVersion,
-  selectHarnessVersion,
 } from '../src/harness-version.js'
 
 describe('Harness version discovery', () => {
-  it('prefers a valid host.describe version', () => {
-    expect(selectHarnessVersion('0.1.0-rc.8', '0.1.0-rc.6')).toBe('0.1.0-rc.8')
-  })
-
-  it('replaces the legacy host.describe placeholder with the distribution version', () => {
-    expect(selectHarnessVersion('0.0.1', '0.1.0-rc.6')).toBe('0.1.0-rc.6')
-  })
-
   it('rejects malformed reported versions', () => {
     expect(normalizeHarnessVersion('  ')).toBeUndefined()
     expect(normalizeHarnessVersion('0.1.0\ninvalid')).toBeUndefined()

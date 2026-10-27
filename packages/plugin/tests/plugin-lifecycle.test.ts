@@ -2,7 +2,6 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy/api'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as remotePlugin from '../src/index.js'
 import type { Config } from '../src/config.js'
@@ -45,7 +44,6 @@ describe('Cordis plugin lifecycle', () => {
     ctx.provide('settings', { register: () => ({
       get: () => config, replace: async (value: Config) => { config = value },
     }) } as never)
-    ctx.provide('apiProxy', apiProxy())
     ctx.provide('typertGateway', typertGateway())
     ctx.provide('connection', { rpc: { handle: (_channel: string, value: ControlRouteHandler) => {
       handler = value
@@ -93,7 +91,7 @@ describe('Cordis plugin lifecycle', () => {
     await ctx.fiber.dispose()
   })
 
-  it('loads against ApiProxy and disposes its runtime', async () => {
+  it('loads against Typert and disposes its runtime', async () => {
     const dshHome = await mkdtemp(join(tmpdir(), 'dsh-remote-cordis-'))
     directories.push(dshHome)
     vi.stubEnv('DSH_HOME', dshHome)
@@ -101,7 +99,6 @@ describe('Cordis plugin lifecycle', () => {
     const ctx = new Context()
     let identityReadyWhenControlRegistered: boolean | undefined
     ctx.provide('settings', settings({ deviceName: 'Cordis test host' }))
-    ctx.provide('apiProxy', apiProxy())
     ctx.provide('typertGateway', typertGateway())
     ctx.provide('connection', connection(() => {
       try {
@@ -117,7 +114,7 @@ describe('Cordis plugin lifecycle', () => {
       expect(ctx.dshRemote.currentIdentity()).toMatchObject({ name: 'Cordis test host' })
       expect(ctx.dshRemote.diagnostics()).toMatchObject({
         loaded: true,
-        capabilities: expect.arrayContaining(['harness.api.v1', 'harness.api.transfer.v1']),
+        capabilities: expect.arrayContaining(['harness.remote.v1', 'harness.remote.transfer.v1']),
       })
     })
     expect(identityReadyWhenControlRegistered).toBe(false)
@@ -127,7 +124,7 @@ describe('Cordis plugin lifecycle', () => {
     await ctx.fiber.dispose()
   })
 
-  it('waits for Desktop connection before activating even when ApiProxy is ready', async () => {
+  it('waits for Desktop connection before activating even when Typert is ready', async () => {
     const dshHome = await mkdtemp(join(tmpdir(), 'dsh-remote-late-connection-'))
     directories.push(dshHome)
     vi.stubEnv('DSH_HOME', dshHome)
@@ -135,7 +132,6 @@ describe('Cordis plugin lifecycle', () => {
     const ctx = new Context()
     const handle = vi.fn(() => async () => undefined)
     ctx.provide('settings', settings({ deviceName: 'Cordis delayed connection host' }))
-    ctx.provide('apiProxy', apiProxy())
     ctx.provide('typertGateway', typertGateway())
     const fiber = await ctx.plugin(remotePlugin, { ...disabledAgentDomains, deviceName: 'Cordis delayed connection host' })
 
@@ -199,7 +195,7 @@ describe('Cordis plugin lifecycle', () => {
     }
   })
 
-  it('waits for a late legacy ApiProxy instead of activating rc.2 without it', async () => {
+  it('keeps a carrier-less Desktop unavailable even when legacy ApiProxy is provided', async () => {
     const dshHome = await mkdtemp(join(tmpdir(), 'dsh-remote-late-apiproxy-'))
     directories.push(dshHome)
     vi.stubEnv('DSH_HOME', dshHome)
@@ -211,7 +207,7 @@ describe('Cordis plugin lifecycle', () => {
       disposed: boolean
     }> = []
     ctx.provide('settings', settings({ deviceName: 'Cordis delayed rc.2 host' }))
-    ctx.provide('typertGateway', typertGateway())
+    ctx.provide('typertGateway', { invoke: vi.fn() } as never)
     ctx.provide('connection', {
       rpc: {
         handle: vi.fn((channel: string, handler: typeof handlers[number]['handler']) => {
@@ -234,12 +230,10 @@ describe('Cordis plugin lifecycle', () => {
         hostAuthorizationAvailable: false,
       },
     })
-    ctx.provide('apiProxy', apiProxy())
-    await vi.waitFor(() => {
-      expect(ctx.dshRemote.currentIdentity()).toMatchObject({ name: 'Cordis delayed rc.2 host' })
-    })
-    expect(handlers[0]?.disposed).toBe(true)
-    expect(handlers.at(-1)?.disposed).toBe(false)
+    ctx.provide('apiProxy', {} as never)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(ctx.get('dshRemote')).toBeUndefined()
+    expect(handlers[0]?.disposed).toBe(false)
 
     await fiber.dispose()
     expect(ctx.get('dshRemote')).toBeUndefined()
@@ -275,24 +269,5 @@ function connection(onHandle?: () => void) {
 }
 
 function typertGateway() {
-  return { invoke: vi.fn(async () => undefined) } as never
-}
-
-function apiProxy(describeHost?: ApiProxy['host']['describe']): ApiProxy {
-  const empty = {}
-  return {
-    sessions: empty,
-    subagents: empty,
-    host: describeHost === undefined ? empty : { describe: describeHost },
-    workspace: empty,
-    skills: empty,
-    agentPresets: empty,
-    goals: empty,
-    settings: empty,
-    credentials: empty,
-    llm: empty,
-    events: { mux: async function* () { return }, host: async function* () { return } },
-    downloads: empty,
-    respond: async () => ({ accepted: true }),
-  } as unknown as ApiProxy
+  return { invoke: vi.fn(async () => undefined), dispatchRpc: vi.fn(async () => ({ ok: true })), openWireStream: vi.fn(async () => (async function* () {})()) } as never
 }

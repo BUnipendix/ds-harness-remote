@@ -29,7 +29,7 @@ class LoopbackTransport extends BaseTransport {
 
   getStats() { return { mode: 'Relay' as const, connected: true } }
   push(data: Uint8Array) { this.emit(data) }
-  drop() { this.emitClose() }
+  drop(error?: Error) { this.emitClose(error) }
 }
 
 const cleanupContract1 = () => {
@@ -38,6 +38,18 @@ const cleanupContract1 = () => {
 afterEach(cleanupContract1)
 
 describe('RemoteClientCore', () => {
+  it('preserves terminal close reasons for recovery and notifies only once', async () => {
+    const transport = new LoopbackTransport()
+    const client = new RemoteClientCore(transport)
+    await client.connect()
+    const closed = vi.fn()
+    client.onClose(closed)
+    const error = Object.assign(new Error('replaced'), { code: 'CONNECTION_REPLACED' })
+    transport.drop(error)
+    await client.close()
+    expect(closed).toHaveBeenCalledOnce()
+    expect(closed).toHaveBeenCalledWith(error)
+  })
   it('matches responses to pending RPC calls', async () => {
     const transport = new LoopbackTransport()
     const client = new RemoteClientCore(transport)

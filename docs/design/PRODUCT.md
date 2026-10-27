@@ -1,10 +1,10 @@
 # DSH Remote 产品定位
 
-更新时间：2026-10-08。
+更新时间：2026-10-27。
 
 ## 用户与目标
 
-面向在工作电脑或服务器运行 Harness / CodeX / Cursor / Antigravity，并希望从另一台电脑、手机或浏览器继续工作的人。
+面向在工作电脑或服务器运行 Harness / CodeX / Cursor / Antigravity / Pi / OpenCode / Claude，并希望从另一台电脑、手机或浏览器继续工作的人。
 Host 保留工作目录、Agent 运行环境与会话数据，Client 提供安全入口和操作界面；会话不迁移到 Client。
 
 Remote Plugin 同时提供常驻 Host 和本地 Remote 工作区入口。用户选择同账号 Host、后端和工作区后继续会话，无需切换 Client 模式。
@@ -14,9 +14,9 @@ Desktop 复用 Harness 原生 UI；Android 提供适合移动端的工作区、�
 
 - 同账号设备发现、身份固定与端到端加密连接。
 - Harness 官方会话、文字/图片 Prompt、历史、模型、权限与审批。
-- 可选 CodeX App Server 和 Cursor / AGY 后端，通过独立数据面展示其会话。
+- 可选 CodeX App Server 和 Cursor / AGY / Pi / OpenCode / Claude ACP 后端，通过独立数据面展示其会话。
 - 后端支持范围内的只读工作区文件与交互终端；明确授权的本机开发服务预览。
-- Android 工作区收藏、最近会话快捷入口、系统/中英文语言与浅色/深色主题。
+- Android 工作区收藏、最近会话快捷入口、跟随系统及英、简中、繁中、日、西、德、法语言与浅色/深色主题。
 - dsh-TUI Host 的原生 `/remote` 登录、状态、退出与二维码授权。
 - 后端设置保存后热更新，工作区可用性由实际就绪状态决定。
 
@@ -30,7 +30,7 @@ CodeX 默认开启、Cursor 默认关闭；其他 ACP 后端以 Host 配置和�
 完整多账号 Server、Remote Web、Admin 与其基础设施在独立仓库维护。
 
 CodeX 和 ACP 只在 Client 内存中投影 Workspace / Session / Chat，不写 DSH SessionStore、Workspace 数据库或 Harness 日志。
-远程文件只读；终端以 Host 用户权限运行，独立于 Agent 审批。AGY 图片允许写入专用私有 tmp 缓存，不能写项目目录或接收任意文件。
+文件树和预览只读；终端以 Host 用户权限运行，独立于 Agent 审批。AGY 图片仅写专用私有 tmp 缓存。独立 `workspace.upload.v1` 可向 Host 验证的当前会话工作区根上传文件；官方 `workspace/create` 可创建缺失的 Harness 工作区目录。两者不扩展为通用文件系统 RPC，CodeX Project 仍只注册已有目录。
 
 ## 设计原则
 

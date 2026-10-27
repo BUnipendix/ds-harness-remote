@@ -82,6 +82,73 @@ export interface HarnessWorkspaceList {
   archivedSessionIds: string[]
 }
 
+export type ScheduleKind = 'after' | 'at' | 'every' | 'daily' | 'weekly' | 'cron'
+
+export interface ScheduleDeliveryReceipt {
+  scheduledAt: string
+  deliveredAt: string
+  messageId: string
+}
+
+export interface ScheduleDeliveryRecord extends ScheduleDeliveryReceipt {
+  prompt?: string
+}
+
+export interface ScheduleCatalogEntry {
+  id: string
+  sessionId: string
+  kind: ScheduleKind
+  title: string
+  prompt: string
+  scheduledAt: string
+  status: 'active' | 'inactive'
+  afterSeconds?: number
+  everySeconds?: number
+  time?: string
+  timeZone?: string
+  weekdays?: number[]
+  expression?: string
+  lastDelivery?: ScheduleDeliveryReceipt
+}
+
+export interface ScheduleDeleteResult {
+  id: string
+  deleted?: boolean
+  code?: string
+}
+
+export interface ScheduleDeliveryHistoryResult {
+  id: string
+  records?: ScheduleDeliveryRecord[]
+  earlierRecordsUnavailable?: boolean
+  earlierRecordsPruned?: boolean
+  retention?: { days: number; records: number }
+  code?: string
+}
+
+export interface HarnessPluginApplication {
+  /** `applied`, `restart-required`, `overridden` or `cancelled`; failures throw. */
+  application: string
+}
+
+export interface HarnessSettingsNamespace {
+  ns: string
+  /** Serialized Schemastery envelope. */
+  schema: unknown
+  value: unknown
+  user?: unknown
+  revision: number
+}
+
+export interface HarnessSettingsDescribe {
+  writable: boolean
+  namespaces: HarnessSettingsNamespace[]
+}
+
+export type HarnessSettingsPathOp =
+  | { op: 'set'; path: string[]; value: unknown }
+  | { op: 'unset'; path: string[] }
+
 export interface HarnessDirectoryEntry {
   name: string
   path: string
@@ -454,6 +521,16 @@ export class HarnessAlphaClient {
     if (result.accepted !== true) throw new RemoteGatewayError('INVALID_MESSAGE', 'The Host did not accept the stop request.')
   }
 
+  async sessionAttachment(sessionId: string, attachmentId: string): Promise<{ attachment: unknown; data: string }> {
+    const result = await this.callValue<{ attachment?: unknown; data?: string; mediaType?: string }>('session/attachment', {
+      request: { sessionId, attachmentId },
+    })
+    return {
+      attachment: result.attachment ?? { mediaType: result.mediaType },
+      data: result.data ?? '',
+    }
+  }
+
   /** Apply one operation to a still-pending queue occurrence (official QueueAction subset). */
   async sessionUpdateQueue(sessionId: string, itemId: string, action: { kind: 'remove' | 'steer' }): Promise<void> {
     const result = await this.callValue<{ accepted: true }>('session/updateQueue', { request: { sessionId, itemId, action } })
@@ -526,6 +603,86 @@ export class HarnessAlphaClient {
       },
     })
     return Array.isArray(result.workspaceIds) ? result.workspaceIds : []
+  }
+
+  async scheduleCatalog(): Promise<ScheduleCatalogEntry[]> {
+    const result = await this.callValue<ScheduleCatalogEntry[] | { items: ScheduleCatalogEntry[] }>('schedule/catalog', {})
+    if (Array.isArray(result)) return result
+    if (result && Array.isArray((result as { items?: ScheduleCatalogEntry[] }).items)) {
+      return (result as { items: ScheduleCatalogEntry[] }).items
+    }
+    throw new RemoteGatewayError('INVALID_MESSAGE', 'The Host returned an invalid schedule catalog payload.')
+  }
+
+  async scheduleDelete(sessionId: string, id: string): Promise<ScheduleDeleteResult> {
+    return this.callValue<ScheduleDeleteResult>('schedule/delete', { request: { sessionId, id } })
+  }
+
+  async scheduleHistory(sessionId: string, id: string, limit = 20, before?: string): Promise<ScheduleDeliveryHistoryResult> {
+    return this.callValue<ScheduleDeliveryHistoryResult>('schedule/history', {
+      request: { sessionId, id, limit, ...(before ? { before } : {}) },
+    })
+  }
+
+  /** Official plugin inventory; the Host hides its own Remote transport rows. */
+  async pluginListBundles(): Promise<unknown[]> {
+    const result = await this.callValue<unknown>('pluginManager/listBundles', {})
+    if (!Array.isArray(result)) throw new RemoteGatewayError('INVALID_MESSAGE', 'The Host returned an invalid plugin bundle list.')
+    return result
+  }
+
+  async pluginListPlugins(): Promise<unknown[]> {
+    const result = await this.callValue<unknown>('pluginManager/listPlugins', {})
+    if (!Array.isArray(result)) throw new RemoteGatewayError('INVALID_MESSAGE', 'The Host returned an invalid plugin list.')
+    return result
+  }
+
+  /** Switch a bundle (by package name) or one of its rows (by entry id); the Host re-checks its inventory. */
+  async pluginSetEnabled(kind: 'bundle' | 'plugin', target: string, enabled: boolean): Promise<HarnessPluginApplication> {
+    const result = kind === 'bundle'
+      ? await this.callValue<unknown>('pluginManager/setBundleEnabled', { name: target, enabled })
+      : await this.callValue<unknown>('pluginManager/setPluginEnabled', { id: target, enabled })
+    if (!isRecord(result) || typeof result.application !== 'string') {
+      throw new RemoteGatewayError('INVALID_MESSAGE', 'The Host returned an invalid plugin change result.')
+    }
+    if (result.application === 'failed') {
+      const error = isRecord(result.error) ? result.error : {}
+      throw new RemoteGatewayError(
+        typeof error.code === 'string' ? error.code : 'FAILED',
+        typeof error.diagnostic === 'string' && error.diagnostic !== '' ? error.diagnostic : 'The Host could not change the plugin.',
+      )
+    }
+    return { application: result.application }
+  }
+
+  async settingsDescribe(): Promise<HarnessSettingsDescribe> {
+    const result = await this.callValue<unknown>('settings/describe', {})
+    if (!isRecord(result) || !Array.isArray(result.namespaces)) {
+      throw new RemoteGatewayError('INVALID_MESSAGE', 'The Host returned invalid settings.')
+    }
+    return {
+      writable: result.writable !== false,
+      namespaces: result.namespaces.filter(isRecord).filter(row => typeof row.ns === 'string')
+        .map(row => ({
+          ns: row.ns as string,
+          schema: row.schema,
+          value: row.value,
+          ...(row.user === undefined ? {} : { user: row.user }),
+          revision: typeof row.revision === 'number' ? row.revision : 0,
+        })),
+    }
+  }
+
+  /** Path-addressed edits against the revision the form was read at; stale writes are refused by the Host. */
+  async settingsMutate(ns: string, ops: HarnessSettingsPathOp[], expectedRevision: number): Promise<void> {
+    const result = await this.callValue<unknown>('settings/mutate', { ns, ops, expectedRevision })
+    if (isRecord(result) && result.ok === false) {
+      const error = isRecord(result.error) ? result.error : {}
+      throw new RemoteGatewayError(
+        typeof error.code === 'string' ? error.code : 'FAILED',
+        typeof error.message === 'string' ? error.message : 'The Host rejected the settings change.',
+      )
+    }
   }
 
   async respondApproval(frameRpcId: string, sessionId: string, approvalId: string, outcome: 'allowed-once' | 'rejected'): Promise<void> {

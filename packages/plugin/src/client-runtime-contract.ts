@@ -1,4 +1,4 @@
-import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
+import type { ControlResult } from './control-result.js'
 import { RemoteClientCore } from '@dsh-remote/client-core'
 import type { CodexAppFrameData, CodexAppStreamClosedData, RemoteWorkspaceTypeDescription } from '@dsh-remote/protocol'
 import type { RtcConnectionDiagnostics, RtcIceServer } from '@dsh-remote/webrtc'
@@ -21,7 +21,6 @@ export interface RemoteHostFeatures {
   commandList: boolean
   fileViewer: boolean
   terminal: boolean
-  apiProxy: boolean
   remoteGateway: boolean
   sessionFormat?: 3
   codex: boolean
@@ -92,8 +91,6 @@ export interface RemoteWorkspaceSelection {
   sessionId?: string
 }
 
-export type HarnessRemoteTransport = 'remoteGateway' | 'apiProxy'
-
 export interface RemoteDeviceView {
   deviceId: string
   name: string
@@ -108,7 +105,7 @@ export interface RemoteDeviceView {
 export interface HostConnectionRpc {
   handle(
     channel: string,
-    handler: (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<RpcResult<unknown>>,
+    handler: (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<ControlResult<unknown>>,
     options: { authority: 'loopback' | 'trusted-host' },
   ): () => Promise<void>
 }
@@ -206,9 +203,9 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-export function ok(value: unknown): RpcResult<unknown> { return { ok: true, value } }
+export function ok(value: unknown): ControlResult<unknown> { return { ok: true, value } }
 
-export function fail(error: unknown): RpcResult<unknown> {
+export function fail(error: unknown): ControlResult<unknown> {
   const source = error instanceof Error ? error : undefined
   const remoteCode = source !== undefined && 'code' in source && typeof source.code === 'string'
     ? source.code

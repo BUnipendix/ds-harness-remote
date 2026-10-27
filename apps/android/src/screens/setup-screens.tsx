@@ -4,23 +4,27 @@ import * as Application from 'expo-application'
 import { File, Paths } from 'expo-file-system'
 import { getContentUriAsync } from 'expo-file-system/legacy'
 import * as IntentLauncher from 'expo-intent-launcher'
-import { ActivityIndicator, Alert, Image, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native'
+import { ActivityIndicator, Alert, Image, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native'
 import { Check, ChevronRight, Download, ExternalLink, Info, KeyRound, Laptop, LockKeyhole, MoreVertical, QrCode as QrCodeIcon, RotateCcw, Settings, type LucideIcon } from 'lucide-react-native'
 import { useAppStore } from '../state/store'
 import type { QrLoginStart } from '../state/store-state'
 import { SOURCE_CODE_URL } from '../lib/links'
+import { foregroundService } from '../services/foreground-service'
 import type { OAuthProviderInfo } from '../services/api'
 import { BlurHeaderFrame, Button, Field, IconButton, KeyValue, Screen, TopBar } from '../ui/components'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { transportPreferenceOptions } from '../types'
 import type { DefaultPermissionPreset, LoginMethod } from '../types'
 import { QrCode } from '../ui/qr-code'
+import Svg, { Path } from 'react-native-svg'
+import { FISH_LOGO_PATH, FISH_LOGO_VIEWBOX } from '../ui/fish-logo'
+import { GithubIcon, GoogleIcon, ZhihuIcon } from '../ui/brand-icons'
 import { radius, spacing, type } from '../ui/theme'
 import { useTheme, type ThemeColors } from '../ui/theme-context'
 import { useResponsiveLayout } from '../ui/responsive'
 import { useThemedStyles } from '../ui/use-themed-styles'
 import { strings as zhCN, type LanguagePreference } from '../locales/i18n'
-import type { ThemePreference } from '../ui/theme'
+import type { ThemePreference, TypographyDensity } from '../ui/theme'
 
 /** Default DSH Remote Server; a build can override it via EXPO_PUBLIC_DSH_REMOTE_SERVER. */
 const defaultServerUrl = 'https://dsh.r2049.cn'
@@ -74,7 +78,7 @@ export function ServerSetupScreen({ onComplete, onBack, onMore, serverExpanded, 
   const availableMethods: SetupLoginMethod[] = (['oauth', 'github-oauth', 'google-oauth'] as const)
     .filter(method => loginProviders.some(provider => provider.id === qrProviderFor(method)))
   availableMethods.push('password')
-  const supportsQr = loginProviders.some(provider => provider.id === qrProviderFor(loginMethod) && provider.qrStartUrl !== undefined)
+  const supportsQrAny = loginProviders.some(provider => provider.qrStartUrl !== undefined && availableMethods.some(method => qrProviderFor(method) === provider.id))
 
   const [qrLogin, setQrLogin] = useState<QrLoginStart>()
   const [qrPhase, setQrPhase] = useState<'idle' | 'loading' | 'waiting' | 'expired' | 'unsupported' | 'failed'>('idle')
@@ -287,16 +291,48 @@ export function ServerSetupScreen({ onComplete, onBack, onMore, serverExpanded, 
     else if (showQr) void refreshQr(method)
   }
 
+  const qrMethods = availableMethods.filter(method => loginProviders.some(provider => provider.id === qrProviderFor(method) && provider.qrStartUrl !== undefined))
+  const oauthMethods = availableMethods.filter(method => method !== 'password')
+
   const toggleQr = () => {
     qrRun.current += 1
-    setShowQr(!showQr)
+    const opening = !showQr
+    // QR needs a provider; fall back to the first QR-capable one while the email form is shown.
+    const method = qrMethods.includes(loginMethod) ? loginMethod : qrMethods[0]
+    if (opening && method === undefined) return
+    setShowQr(opening)
     setQrLogin(undefined)
     setQrPhase('idle')
-    if (!showQr) void refreshQr()
+    if (opening && method !== undefined) {
+      setLoginMethod(method)
+      void refreshQr(method)
+    }
+  }
+
+  const signInWithProvider = (method: SetupLoginMethod) => {
+    if (showQr) {
+      qrRun.current += 1
+      setShowQr(false)
+      setQrLogin(undefined)
+      setQrPhase('idle')
+    }
+    setLoginMethod(method)
+    if (method === 'oauth') void signInWithZhihu()
+    else if (method === 'github-oauth') void signInWithGithub()
+    else if (method === 'google-oauth') void signInWithGoogle()
   }
 
   const qrContent = !showQr ? null : (
     <View style={styles.qrPanel}>
+      {qrMethods.length > 1 && (
+        <View style={[styles.methodTabs, styles.pillAction]}>
+          {qrMethods.map(method => (
+            <Pressable key={method} accessibilityRole="tab" accessibilityState={{ selected: loginMethod === method, disabled: busy }} disabled={busy} onPress={() => chooseLoginMethod(method)} style={[styles.methodTab, loginMethod === method && styles.methodTabActive]}>
+              <Text style={[styles.methodTabText, loginMethod === method && styles.methodTabTextActive]} numberOfLines={1}>{loginMethodLabel(method)}</Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
       <Text style={styles.qrTitle}>{loginMethodLabel(loginMethod)} · {zhCN.setup.qrScanTitle}</Text>
       {qrPhase === 'loading'
         ? <View style={styles.qrPlaceholder}><ActivityIndicator color={colors.primary} accessibilityLabel={zhCN.setup.qrWaiting} /></View>
@@ -313,91 +349,132 @@ export function ServerSetupScreen({ onComplete, onBack, onMore, serverExpanded, 
                     label={`${zhCN.setup.qrScanTitle}. ${zhCN.setup.qrScanHint}`}
                   />
                 : null}
-      {qrPhase === 'waiting' && <Text style={styles.qrHint}>{zhCN.setup.qrScanHint}</Text>}
-      {qrPhase === 'expired' && <Text style={styles.qrHint}>{zhCN.setup.qrScanHint}</Text>}
-      <Button
-        label={zhCN.setup.qrRefresh}
-        variant="secondary"
-        onPress={() => void refreshQr()}
-        loading={qrPhase === 'loading'}
-        disabled={busy || serverDirty}
-      />
+      {(qrPhase === 'waiting' || qrPhase === 'expired') && <Text style={styles.qrHint}>{zhCN.setup.qrScanHint}</Text>}
+      <View style={styles.pillAction}>
+        <Button
+          label={zhCN.setup.qrRefresh}
+          variant="secondary"
+          onPress={() => void refreshQr()}
+          loading={qrPhase === 'loading'}
+          disabled={busy || serverDirty}
+        />
+      </View>
+      <Pressable accessibilityRole="button" onPress={toggleQr} style={styles.textLink}>
+        <Text style={styles.textLinkLabel}>{zhCN.setup.emailSignIn}</Text>
+      </Pressable>
     </View>
   )
 
-  const credentialContent = loginMethod === 'oauth'
-    ? <>
-        <Button label={zhCN.setup.zhihu} onPress={() => void signInWithZhihu()} loading={oauthBusy} disabled={busy || serverDirty} />
-        <Text style={styles.oauthHint}>{zhCN.setup.oauthHint}</Text>
-      </>
-    : loginMethod === 'github-oauth'
-      ? <>
-          <Button label={zhCN.setup.github} onPress={() => void signInWithGithub()} loading={oauthBusy} disabled={busy || serverDirty} />
-          <Text style={styles.oauthHint}>{zhCN.setup.oauthHint}</Text>
-        </>
-      : loginMethod === 'google-oauth'
-        ? <>
-            <Button label={zhCN.setup.google} onPress={() => void signInWithGoogle()} loading={oauthBusy} disabled={busy || serverDirty} />
-            <Text style={styles.oauthHint}>{zhCN.setup.oauthHint}</Text>
-          </>
-      : <>
-          <Field label={zhCN.setup.email} value={email} onChangeText={setEmail} autoCapitalize="none" autoCorrect={false} keyboardType="email-address" textContentType="username" placeholder={zhCN.setup.emailPlaceholder} />
-          <Field label={zhCN.setup.password} value={password} onChangeText={setPassword} secureTextEntry textContentType="password" returnKeyType="go" onSubmitEditing={() => { if (canSubmit) void submit() }} placeholder={zhCN.setup.passwordPlaceholder} hint={zhCN.setup.passwordHint} />
-          <Button label={zhCN.setup.title} onPress={() => void submit()} loading={busy} disabled={!canSubmit || serverDirty} />
-        </>
+  const emailContent = (
+    <>
+      <TextInput
+        style={styles.pillInput}
+        value={email}
+        onChangeText={setEmail}
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="email-address"
+        textContentType="username"
+        placeholder={zhCN.setup.emailPlaceholder}
+        placeholderTextColor={colors.muted}
+        accessibilityLabel={zhCN.setup.email}
+      />
+      <TextInput
+        style={styles.pillInput}
+        value={password}
+        onChangeText={setPassword}
+        secureTextEntry
+        textContentType="password"
+        returnKeyType="go"
+        onSubmitEditing={() => { if (canSubmit) void submit() }}
+        placeholder={zhCN.setup.passwordPlaceholder}
+        placeholderTextColor={colors.muted}
+        accessibilityLabel={zhCN.setup.password}
+      />
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={zhCN.setup.title}
+        accessibilityState={{ disabled: !canSubmit || serverDirty || busy, busy }}
+        disabled={!canSubmit || serverDirty || busy}
+        onPress={() => void submit()}
+        style={({ pressed }) => [styles.pillButton, canSubmit && styles.pillButtonReady, pressed && styles.pillButtonPressed]}
+      >
+        {busy
+          ? <ActivityIndicator color={canSubmit ? colors.background : colors.muted} />
+          : <Text style={[styles.pillButtonText, canSubmit && styles.pillButtonTextReady]}>{zhCN.setup.title}</Text>}
+      </Pressable>
+      <Text style={styles.oauthHint}>{zhCN.setup.passwordHint}</Text>
+    </>
+  )
+
+  const providerIcon = (method: SetupLoginMethod) => method === 'oauth'
+    ? <ZhihuIcon size={26} color={colors.background} />
+    : method === 'github-oauth'
+      ? <GithubIcon size={28} color={colors.background} />
+      : <GoogleIcon size={26} />
+
+  const providerLabel = (method: SetupLoginMethod) => method === 'oauth'
+    ? zhCN.setup.zhihu
+    : method === 'github-oauth' ? zhCN.setup.github : zhCN.setup.google
+
+  const whaleWidth = largeScreen ? 240 : 196
 
   return (
     <View style={styles.flex}>
-      <BlurHeaderFrame header={<TopBar title="DSH Remote" onBack={onBack} action={<IconButton label={zhCN.settings.more} icon={MoreVertical} onPress={onMore} />} />}>
+      <BlurHeaderFrame header={<TopBar title="" onBack={onBack} action={<IconButton label={zhCN.settings.more} icon={MoreVertical} onPress={onMore} />} />}>
         <Screen fill>
-          <View style={styles.loginIntro}>
-            <Text style={styles.lead}>{zhCN.setup.lead}</Text>
+          <View style={[styles.hero, largeScreen && styles.formLarge]}>
+            <Svg
+              width={whaleWidth}
+              height={(whaleWidth * FISH_LOGO_VIEWBOX.height) / FISH_LOGO_VIEWBOX.width}
+              viewBox={`0 0 ${FISH_LOGO_VIEWBOX.width} ${FISH_LOGO_VIEWBOX.height}`}
+              accessible={false}
+            >
+              <Path d={FISH_LOGO_PATH} fill={colors.ink} />
+            </Svg>
+            <View style={styles.wordmarkRow} accessible accessibilityRole="header" accessibilityLabel="DeepSeek Harness Remote">
+              <Text style={styles.wordmark}>HARNESS</Text>
+              <View style={styles.wordmarkDot} />
+            </View>
+            <Text style={styles.wordmarkSub}>DEEPSEEK · REMOTE</Text>
           </View>
 
-          <View style={[styles.form, largeScreen && styles.formLarge]}>
-            <View style={styles.methodTabs}>
-              {availableMethods.map(method => (
-                <Pressable key={method} accessibilityRole="tab" accessibilityState={{ selected: loginMethod === method, disabled: busy }} disabled={busy} onPress={() => chooseLoginMethod(method)} style={[styles.methodTab, loginMethod === method && styles.methodTabActive]}>
-                  <Text style={[styles.methodTabText, loginMethod === method && styles.methodTabTextActive]} numberOfLines={1}>{loginMethodLabel(method)}</Text>
-                </Pressable>
-              ))}
-            </View>
-
-            {supportsQr && !serverDirty && providersPhase === 'ready' && (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={showQr ? loginMethodLabel(loginMethod) : zhCN.setup.qr}
-                accessibilityState={{ expanded: showQr, disabled: busy || serverDirty }}
-                disabled={busy || serverDirty}
-                onPress={toggleQr}
-                style={({ pressed }) => [styles.qrEntry, pressed && styles.qrEntryPressed]}
-              >
-                <QrCodeIcon size={22} color={colors.primary} />
-                <View style={styles.qrEntryCopy}>
-                  <Text style={styles.qrEntryText}>{showQr ? (loginMethod === 'oauth' ? zhCN.setup.zhihu : loginMethod === 'github-oauth' ? zhCN.setup.github : zhCN.setup.google) : zhCN.setup.qr}</Text>
-                  <Text style={styles.qrEntryHint}>{showQr ? zhCN.setup.oauthHint : zhCN.setup.qrEntryHint}</Text>
-                </View>
-                <ChevronRight size={16} color={colors.muted} />
-              </Pressable>
-            )}
-
+          <View style={[styles.loginCard, largeScreen && styles.formLarge]}>
+            <Text style={styles.loginCardTitle}>{zhCN.setup.heroSignIn}</Text>
             {providersPhase === 'loading'
               ? <ActivityIndicator color={colors.primary} />
               : <>
                   {providersPhase === 'failed' && <Button label={zhCN.common.retry} variant="secondary" onPress={() => setProviderReload(value => value + 1)} />}
-                  {qrContent ?? credentialContent}
+                  {qrContent ?? emailContent}
                 </>}
-
-
           </View>
 
-          <View style={[styles.securityNote, largeScreen && styles.securityNoteLarge]}>
-            <View style={styles.securityHeading}>
-              <LockKeyhole size={20} color={colors.primary} />
-              <Text style={styles.securityTitle}>{zhCN.setup.trustTitle}</Text>
+          {providersPhase === 'ready' && oauthMethods.length > 0 && (
+            <View style={styles.providerRow}>
+              {oauthMethods.map(method => (
+                <Pressable
+                  key={method}
+                  accessibilityRole="button"
+                  accessibilityLabel={providerLabel(method)}
+                  accessibilityHint={zhCN.setup.oauthHint}
+                  accessibilityState={{ disabled: busy || oauthBusy || serverDirty, busy: oauthBusy && loginMethod === method }}
+                  disabled={busy || oauthBusy || serverDirty}
+                  onPress={() => signInWithProvider(method)}
+                  style={({ pressed }) => [styles.providerButton, pressed && styles.providerButtonPressed]}
+                >
+                  {oauthBusy && loginMethod === method ? <ActivityIndicator color={colors.background} /> : providerIcon(method)}
+                </Pressable>
+              ))}
             </View>
-            <Text style={styles.securityBody}>{zhCN.setup.trustBody}</Text>
-          </View>
+          )}
+
+          {supportsQrAny && !serverDirty && providersPhase === 'ready' && !showQr && (
+            <Pressable accessibilityRole="button" accessibilityLabel={zhCN.setup.qr} disabled={busy} onPress={toggleQr} style={styles.qrLink}>
+              <QrCodeIcon size={16} color={colors.muted} />
+              <Text style={styles.qrLinkText}>{zhCN.setup.qr}</Text>
+            </Pressable>
+          )}
+
           <View style={styles.loginFooter}>
             <Pressable accessibilityRole="link" accessibilityLabel="GitHub/liguobao"
               onPress={() => void Linking.openURL('https://github.com/liguobao').catch(() => {
@@ -452,6 +529,9 @@ export function SettingsScreen({ onBack, onReset }: { onBack: () => void; onRese
   const showAllLanguages = allLanguagesVisible || !['system', 'zh-CN', 'en-US'].includes(languagePreference)
   const themePreference = useAppStore(state => state.themePreference)
   const setThemePreference = useAppStore(state => state.setThemePreference)
+  const typographyDensity = useAppStore(state => state.typographyDensity)
+  const setTypographyDensity = useAppStore(state => state.setTypographyDensity)
+  const [densitySaving, setDensitySaving] = useState(false)
   const compactHistory = useAppStore(state => state.compactHistory)
   const setCompactHistory = useAppStore(state => state.setCompactHistory)
   const [compactSaving, setCompactSaving] = useState(false)
@@ -487,6 +567,14 @@ export function SettingsScreen({ onBack, onReset }: { onBack: () => void; onRese
     try { await setCompactHistory(value) }
     catch { Alert.alert(zhCN.settings.compactHistorySaveFailed, zhCN.settings.statusBarSaveFailedBody) }
     finally { setCompactSaving(false) }
+  }
+
+  const toggleTypographyDensity = async (value: TypographyDensity) => {
+    if (densitySaving || value === typographyDensity) return
+    setDensitySaving(true)
+    try { await setTypographyDensity(value) }
+    catch { Alert.alert(zhCN.settings.typographyDensitySaveFailed, zhCN.settings.statusBarSaveFailedBody) }
+    finally { setDensitySaving(false) }
   }
 
   const toggleStatusBar = async (visible: boolean) => {
@@ -596,6 +684,36 @@ export function SettingsScreen({ onBack, onReset }: { onBack: () => void; onRese
 
             <View style={styles.preferenceList}>
               <View style={styles.preferenceOption}>
+                <View style={styles.preferenceCopy}>
+                  <Text style={styles.preferenceName}>{zhCN.settings.typographyDensity}</Text>
+                  <Text style={styles.preferenceDescription}>{zhCN.settings.typographyDensityNote}</Text>
+                </View>
+              </View>
+            </View>
+            <View style={[styles.segmentRow, styles.appearanceSegments]} accessibilityRole="tablist">
+              {([
+                { value: 'standard' as const, name: zhCN.settings.densityStandard },
+                { value: 'compact' as const, name: zhCN.settings.densityCompact },
+              ]).map(option => {
+                const chosen = option.value === typographyDensity
+                return (
+                  <Pressable
+                    key={option.value}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: chosen }}
+                    onPress={() => void toggleTypographyDensity(option.value)}
+                    style={[styles.segmentButton, chosen && styles.segmentButtonActive]}
+                  >
+                    <Text style={[styles.segmentButtonText, chosen && styles.segmentButtonTextActive]} numberOfLines={1}>
+                      {option.name}
+                    </Text>
+                  </Pressable>
+                )
+              })}
+            </View>
+
+            <View style={styles.preferenceList}>
+              <View style={styles.preferenceOption}>
                 <Text style={[styles.preferenceName, styles.languageName]}>{zhCN.settings.statusBar}</Text>
                 <Switch
                   accessibilityLabel={zhCN.settings.statusBar}
@@ -636,6 +754,27 @@ export function SettingsScreen({ onBack, onReset }: { onBack: () => void; onRese
                 <Text style={[styles.preferenceName, styles.languageName]}>{zhCN.comfort.systemNotifications}</Text>
                 <ExternalLink size={17} color={colors.muted} />
               </Pressable>
+              {Platform.OS === 'android' && (
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={async () => {
+                    const ok = await foregroundService.requestIgnoreBatteryOptimizations()
+                    if (!ok) {
+                      Alert.alert(
+                        zhCN.comfort.batteryOptimization,
+                        zhCN.comfort.batteryOptimizationFailed,
+                      )
+                    }
+                  }}
+                  style={({ pressed }) => [styles.preferenceOption, styles.preferenceAction, pressed && styles.preferenceActionPressed]}
+                >
+                  <View style={styles.preferenceCopy}>
+                    <Text style={[styles.preferenceName, styles.languageName]}>{zhCN.comfort.batteryOptimization}</Text>
+                    <Text style={styles.preferenceDescription}>{zhCN.comfort.batteryOptimizationDescription}</Text>
+                  </View>
+                  <ExternalLink size={17} color={colors.muted} />
+                </Pressable>
+              )}
               {comfort.error !== undefined && <Text style={styles.preferenceError} accessibilityRole="alert">{comfort.error}</Text>}
             </View>
 
@@ -1008,8 +1147,28 @@ function createStyles(colors: ThemeColors) {
   // Reading cap for wide landscape tablets; the live width style is applied by
   // the screens that opt in (portrait phones never exceed the cap).
   contentColumn: { width: '100%', alignSelf: 'center' },
-  loginIntro: { width: '100%', maxWidth: 560, alignSelf: 'center', paddingTop: spacing.xl },
-  loginFooter: { marginTop: 'auto', paddingTop: spacing.xxl, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  hero: { width: '100%', alignItems: 'center', paddingTop: spacing.lg },
+  wordmarkRow: { flexDirection: 'row', alignItems: 'flex-end', marginTop: spacing.md },
+  wordmark: { fontSize: 46, lineHeight: 50, fontWeight: '900', letterSpacing: -1.5, color: colors.ink },
+  wordmarkDot: { width: 14, height: 14, marginLeft: 4, marginBottom: 8, backgroundColor: colors.primary },
+  wordmarkSub: { ...type.caption, color: colors.muted, letterSpacing: 4, marginTop: 2, fontWeight: '600' },
+  loginCard: { marginTop: spacing.xl, gap: spacing.md, paddingHorizontal: spacing.lg, paddingTop: spacing.xl, paddingBottom: spacing.lg, borderRadius: 28, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, backgroundColor: colors.surface, elevation: 2, shadowColor: colors.shadow, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.08, shadowRadius: 18 },
+  loginCardTitle: { ...type.heading, fontSize: 20, color: colors.ink, textAlign: 'center', marginBottom: spacing.sm },
+  pillInput: { minHeight: 52, borderRadius: 26, paddingHorizontal: spacing.lg, backgroundColor: colors.surfaceStrong, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, color: colors.ink, fontSize: 16 },
+  pillButton: { minHeight: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', marginTop: spacing.xs, backgroundColor: colors.surfaceStrong },
+  pillButtonReady: { backgroundColor: colors.ink },
+  pillButtonPressed: { opacity: 0.8 },
+  pillButtonText: { ...type.smallStrong, color: colors.muted },
+  pillButtonTextReady: { color: colors.background },
+  pillAction: { alignSelf: 'stretch' },
+  textLink: { minHeight: 40, justifyContent: 'center', paddingHorizontal: spacing.sm },
+  textLinkLabel: { ...type.smallStrong, color: colors.primary },
+  providerRow: { flexDirection: 'row', justifyContent: 'center', gap: spacing.xxl, marginTop: spacing.xxl },
+  providerButton: { width: 60, height: 60, borderRadius: 30, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.ink, elevation: 4, shadowColor: colors.shadow, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 10 },
+  providerButtonPressed: { opacity: 0.75 },
+  qrLink: { flexDirection: 'row', alignSelf: 'center', alignItems: 'center', gap: spacing.xs, minHeight: 44, marginTop: spacing.md, paddingHorizontal: spacing.sm },
+  qrLinkText: { ...type.small, color: colors.muted },
+  loginFooter: { marginTop: 'auto', paddingTop: spacing.lg, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   loginCredit: { ...type.caption, color: colors.muted },
   loginCreditLink: { minHeight: 44, justifyContent: 'center', paddingHorizontal: spacing.xs },
   loginCreditName: { ...type.caption, color: colors.primary, textDecorationLine: 'underline' },

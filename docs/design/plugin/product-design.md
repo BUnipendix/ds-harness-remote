@@ -1,18 +1,18 @@
 # Remote Plugin 产品设计
 
-更新时间：2026-10-08；目标项目：`packages/plugin`。
+更新时间：2026-10-27；目标项目：`packages/plugin`。
 
 ## 定位
 
 一个 Plugin 同时提供 Host runtime 与本地 Remote 工作区入口，无用户可见的 Client 模式。
-Harness 通过官方 ApiProxy / Typert Remote carrier 接入；CodeX、Cursor、AGY 保留各自独立的数据面，Desktop 以内存载体复用原生 Workspace / Session / Conversation UI。
+Harness 通过官方 Typert Remote carrier 接入；CodeX 与 ACP 后端 保留各自独立的数据面，Desktop 以内存载体复用原生 Workspace / Session / Conversation UI。
 
 ## 用户路径
 
 1. 在 Desktop 插件管理或指定 dsh profile 安装 Plugin；GitHub 根包和 npm 子包均保留发布入口。
 2. Host 通过账号密码、GitHub/知乎授权或主机匹配码加入账号。dsh-TUI 可用 `/remote login|status|logout` 和终端二维码。
 3. Client 使用同账号的独立设备身份登录，选择在线 Host；列表过滤本机，并展示系统、Harness / Plugin 版本及连接状态。
-4. 选择已就绪的 Harness / CodeX / Cursor / AGY 工作区，或通过对应领域受限的目录入口添加。
+4. 选择已就绪的 Harness / CodeX / ACP 工作区，或通过对应领域受限的目录入口添加。
 5. 打开或新建会话，发送 Prompt、查看历史和流式回复、执行受支持的模型/权限操作与单次审批。
 6. 使用当前领域支持的 Files / Terminal；开发服务预览仅在已授权端口及受支持的 Desktop 本机入口开放。
 7. 退出 Remote 回到本地 Harness；断线使旧 stream 和审批句柄失效，恢复后读取新的历史 baseline。
@@ -28,7 +28,7 @@ Harness 通过官方 ApiProxy / Typert Remote carrier 接入；CodeX、Cursor、
 | Remote Header | 当前 Host、链路、加密说明、退出和预览服务 |
 | 本地设置 | Host 访问、终端、loopback 白名单、Agent 后端命令和开关 |
 | CodeX | 默认开启；App Server 数据源；Project/Thread 与内存展示投影 |
-| ACP | Cursor 默认关闭；Cursor/AGY 独立配置、capability 和会话归属 |
+| ACP | Cursor 默认关闭；各后端独立配置、capability 和会话归属 |
 
 `workspaceTypes.available` 表示实际就绪；capability 表示支持的协议。两者都满足才允许进入对应工作区。
 后端保存热更新相关进程、流和 capability，不重启整个 DSH；不受影响的后端及 Harness 加密连接保留。
@@ -36,6 +36,7 @@ Harness 通过官方 ApiProxy / Typert Remote carrier 接入；CodeX、Cursor、
 ## 访问边界
 
 - 原生文件树与预览只读，使用官方工具或 provider 授权范围；不增加通用文件写入 RPC。
+- 官方 `workspace/create` 可创建缺失的 Harness 工作区目录；独立 `workspace.upload.v1` 仅向 Host 验证的当前会话工作区根上传文件，不接受任意 Client 路径。
 - CodeX Project 注册限 Host 上已存在的真实绝对目录，不创建目录、不推测共同父目录。
 - CodeX 工具 scope 来自 Host 确认的 Thread cwd；ACP 工具 scope 来自会话创建或 Host catalog。
 - 终端默认开启，以 Host 用户权限运行；终端归属与输入权独立于 Agent 审批，断线不重放输入。

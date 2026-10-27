@@ -27,6 +27,7 @@
   <a href="https://dshfind.com/zh/plugins/liguobao/ds-harness-remote?ref=badge"><img src="https://dshfind.com/api/badge/liguobao/ds-harness-remote?metric=downloads&amp;lang=zh" alt="dshfind 下载量" width="137" height="20" align="absmiddle"></a>
 </p>
 
+
 <p align="center">
   <strong>本仓库在原版基础上加强了通讯加密。</strong><br>
   带 <strong>🆕</strong> 标记的内容是本仓库独有，
@@ -41,8 +42,6 @@
 | 服务器断开空闲隧道 | — | 确认码不失效，手机自动重试到过期 |
 | 重新配对 | — | 设备详情里的「重新配对」，不需要重新绑定账号 |
 
-远程模式支持官方插件页的列表、配置和启用/停用（需更新 Host Remote 插件）。Remote 自身仍只能在 Host 本地配置和启停；不开放远程安装、卸载。
-
 ## 一次连接，随时可用。
 
 从手机、电脑、浏览器继续使用你的 DeepSeek Harness 实例。
@@ -55,7 +54,22 @@ DS Harness Remote 只是通往这个工作环境的另一个窗口。
 
 已支持 DeepSeek Harness 桌面版，使用最新版本安装即可：
 
-`ds-harness-remote@0.5.18`
+`ds-harness-remote@0.5.21`
+
+
+## 主要特性
+
+
+- 从另一台设备（Web、PC、移动端）远程到本地Harness实例：DSH 优先，CodeX、Cursor、Antigravity 一样可用。
+- DeepSeek Harness 原生界面，不另外维护一套桌面会话 UI。
+- 支持新建工作区、模型配置、对话模型切换，远端如本地一样丝滑。
+- 已支持 DeepSeek Harness 桌面版，安装即可使用。
+- 可将纯终端 [dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI) profile 作为 Host
+- Harness 主机无需开放公网监听端口，无需公网IP，可以从任意可上网的地方，通过双向端到端加密链路安全连接。
+- 优先使用P2P网络，全球多TURN节点中转，极端情况下使用Server Relay确保可用。
+- 通过 Harness 原生侧栏提供工作区文件、只读预览、远程终端和已授权本机开发服务预览。
+- CodeX / ACP 终端使用 Host 默认 shell，在会话目录启动，并在重连时恢复终端屏幕。
+- Android 按对话保留草稿与阅读位置，提供后端分类搜索和本机收藏；对话正文从已连接的 Host 加载。
 
 ## 目录
 
@@ -77,32 +91,16 @@ DS Harness Remote 只是通往这个工作环境的另一个窗口。
 - [项目声明与商标](#项目声明与商标)
 - [License](#license)
 
-## 主要特性
-
-Remote 支持 Desktop/浏览器原生「自动化任务」界面的任务列表、投递历史、时间/名称/指令修改和删除；新建仍通过官方 `schedule_create` Agent 工具完成。任务保存在 Host 并由 Host 执行，需更新 Host Remote 插件以启用管理接口。
-
-- 从另一台设备（Web、PC、移动端）远程到本地Harness实例：DSH 优先，CodeX、Cursor、Antigravity 一样可用。
-- DeepSeek Harness 原生界面，不另外维护一套桌面会话 UI。
-- 支持新建工作区、模型配置、对话模型切换，远端如本地一样丝滑。
-- 已支持 DeepSeek Harness 桌面版，安装即可使用。
-- 可将纯终端 [dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI) profile 作为 Host
-- Harness 主机无需开放公网监听端口，无需公网IP，可以从任意可上网的地方，通过双向端到端加密链路安全连接。
-- 优先使用P2P网络，全球多TURN节点中转，极端情况下使用Server Relay确保可用。
-- 通过 Harness 原生侧栏提供工作区文件、只读预览、远程终端和已授权本机开发服务预览。
-- CodeX / ACP 终端使用 Host 默认 shell，在会话目录启动，并在重连时恢复终端屏幕。
-- Android 按对话保留草稿与阅读位置，提供后端分类搜索和本机收藏；对话正文从已连接的 Host 加载。
-
 ## 支持的客户端
 
 | 客户端 | 形态 | 状态 | 说明 |
 | --- | --- | --- | --- |
-| DSH&nbsp;Desktop&nbsp;插件 | Harness 桌面版内的 Remote 侧栏 | 已支持 | 装 `ds-harness-remote@0.5.18`；Host 也可以就是这台电脑 |
-| Remote&nbsp;Web | 浏览器页面 | 已支持 | 打开 [dsh.r2049.cn/app](https://dsh.r2049.cn/app)，复用 Harness 原生界面 |
+| DSH&nbsp;Desktop&nbsp;插件 | Remote 侧栏 | 已支持 | 装 `ds-harness-remote@0.5.21`；Host 也可以就是这台电脑 |
+| Web | 浏览器页面 | 已支持 | 打开 [https://dsh.r2049.cn](https://dsh.r2049.cn)，复用 Harness 原生界面 |
 | Android | 原生 App | 已支持 | 从 [Releases](https://github.com/liguobao/ds-harness-remote/releases/latest) 下载 APK，见 [Android 说明](apps/android/README.md) |
 | iOS | TestFlight 内测 | 内测 | 未公开上架，入口见 [issue #20](https://github.com/liguobao/ds-harness-remote/issues/20) |
-| VS&nbsp;Code | IDE 扩展 | 实验性 | 登录、Host 指纹固定、工作区到会话导航与 Prompt；流式更新、自动重连与问答界面仍在开发，跨机端到端验证尚未完成 |
-| 浏览器扩展 | Chrome / Edge MV3 扩展 | 仅入口 | 读取已登录 Web 的授权换取独立设备凭据、列出在线 Host、打开同源 Remote Web，不承载会话界面 |
-| dsh-TUI | 纯终端 CLI profile | 已支持 | 可作 Host，见 [dsh-TUI Remote 使用指南](docs/dsh-tui.md)；安装脚本不会为它自动创建 Web 服务 |
+| 浏览器扩展 | Chrome | 仅入口 | 读取已登录 Web 的授权换取独立设备凭据、列出在线 Host、打开同源 Remote Web，不承载会话界面 |
+| dsh-TUI | 纯终端 CLI  | 已支持 | 可作 Host，见 [dsh-TUI Remote 使用指南](docs/dsh-tui.md)；安装脚本不会为它自动创建 Web 服务 |
 
 多个客户端可以同时连接同一个 Host，RPC 与数据流按连接隔离。
 
@@ -112,10 +110,10 @@ Remote 支持 Desktop/浏览器原生「自动化任务」界面的任务列表�
 
 在 DeepSeek Harness Desktop 的 **扩展 / 插件管理** 中，选择从 **npm** 安装，输入包名和版本：
 
-`ds-harness-remote@0.5.18`
+`ds-harness-remote@0.5.21`
 
 安装后重启 Desktop。也可使用它的官方 `dsh` 启动器安装固定版本：
-`dsh plugin --profile desktop add -w ds-harness-remote@0.5.18`。
+`dsh plugin --profile desktop add -w ds-harness-remote@0.5.21`。
 
 ### dsh-TUI Host
 
@@ -127,7 +125,7 @@ Remote 支持 Desktop/浏览器原生「自动化任务」界面的任务列表�
 通过 DSH 插件管理命令，将确切版本加入 `web` profile：
 
 ```sh
-dsh plugin --profile web add -w ds-harness-remote@0.5.18
+dsh plugin --profile web add -w ds-harness-remote@0.5.21
 ```
 
 安装后请重启 DeepSeek Harness。
@@ -144,9 +142,24 @@ dsh plugin --profile web add -w ds-harness-remote@0.5.18
 
 隐藏输入 Token、更新、服务管理和验证边界见[安装指南](docs/installation.zh.md)。仓库修改不会自动部署到线上安装入口。
 
+### 推荐搭配：Intelligent UI
+
+[Intelligent UI](https://github.com/dreamfarer-space/deepseek-harness-intelligent-ui) 让模型用卡片、表格、图表和表单作答。
+Android 客户端可原生渲染这些内容，并在 **插件 → Remote 适配** 中列出该插件，可直接开关和修改实时设置。
+
+请在电脑上安装，并 **安装到与 Remote 相同的 profile**（手机端不能安装插件）：
+
+| Host | 方式 |
+| --- | --- |
+| Desktop | 插件管理 → 从 npm 安装 → `deepseek-harness-intelligent-ui` |
+| CLI `web` profile | `dsh plugin --profile web add -w deepseek-harness-intelligent-ui` |
+| `scripts/install.sh` | 设置 `INTELLIGENT_UI=1`（可选 `INTELLIGENT_UI_VERSION=...`） |
+
+安装后重启对应的 Harness。在手机上修改其设置需要 Intelligent UI 0.2.10 或更高版本。
+
 ### Android 客户端
 
-主机工作区标题栏「＋」左侧的 Bot 按钮可切换到原生 DS Bot 团队模式，包含 Bot、群聊、管理、问答与交互卡片，支持 DS Bot 0.2.1 旁问（`/btw`）、群聊继续及原生图表/计算卡片（HTML 仅显示摘要）；Bot 模式右上角三点菜单左侧提供工作区切换图标，新建操作收在菜单内。需在所连接的主机中启用 ds-bot；功能边界和验收状态见 [Bot 模式说明](apps/android/README.md#bot-mode)。
+支持同时使用多工作区连接对话，同时创造性加入了 「Bot 模式」（ Power by [Fei2411/DS-Bot](https://github.com/Fei2411/DS-Bot)）
 
 从 [GitHub Releases](https://github.com/liguobao/ds-harness-remote/releases/latest)
 
@@ -196,7 +209,9 @@ Workspace 会在 Harness 原生界面中打开，顶部显示当前 Host 和加�
   <img src="docs/images/image-result.jpg" alt="在 Android 客户端中查看图片理解结果" width="30%">
 </p>
 
-移动端设置提供默认关闭的全局「会话精简模式」，下次打开会话生效。支持该能力的 Host 缩减历史工具详情，保留正文和工具状态；旧 Host 保持原有行为，手机不做本地精简。关闭后重新打开会话可加载完整历史。
+移动端设置提供默认关闭的全局「会话精简模式」，下次打开会话生效。
+
+支持该能力的 Host 缩减历史工具详情，保留正文和工具状态，关闭此设置后重新打开会话可加载完整历史。
 
 ## 工作方式
 
@@ -226,6 +241,7 @@ Desktop 与 Android 在内存中将工作区和会话映射到现有界面，不
 
 当前已支持：
 
+- **Codex**：通过独立的 App Server 接口接入，使用同一工作区入口。
 - **Cursor**：通过 CLI 的 ACP 接口接入。
 - **Antigravity（AGY）**：将 CLI 的 stream-json 接口适配到 ACP gateway。
 - **Pi Agent（实验性）**：在 Host 安装 `@earendil-works/pi-coding-agent` 与 `pi-acp`，配置 Pi 本机模型服务后，Remote 默认自动检测并初始化，ACP 初始化成功才开放工作区；可在 Remote 设置中明确关闭，使用独立 ACP 数据面。工具按 Host 用户权限执行，逐工具确认需要 Pi 扩展，默认不会自动启用。
@@ -233,19 +249,24 @@ Desktop 与 Android 在内存中将工作区和会话映射到现有界面，不
 - **OpenCode** — 通过 `opencode acp` 接入，支持工作区发现和历史恢复。Host 启动时检查 CLI 支持的参数，兼容带原生监听器与纯 stdio 的 ACP 构建。Desktop/Android 原生会话归档要求认证 loopback API；不提供该接口的版本会明确报告归档不可用。归档状态由 OpenCode 保存，历史保留；暂不提供恢复归档入口。
 - **Claude** — 使用 Host 本机已授权的 `claude-agent-acp`，需在 Remote 设置中开启；Desktop/Android 支持工作区、历史、文字消息及审批，暂不开放图片输入与直接 Files/Terminal 访问。
 
-Desktop/Android 的 Cursor、Claude、Pi、OpenCode、AGY 模型选择使用 Host 实际模型目录，并等待后端确认。思考强度选项以上游实际提供为准。Cursor 每个会话使用独立进程，切换模型不会影响其他会话。
 
-- **Codex**：通过独立的 App Server 接口接入，使用同一工作区入口。
 
 配置与后端适配开发见 [Agent 工作区接入指南](docs/acp-integration.md)。
 
+Desktop/Android 的 Cursor、Claude、Pi、OpenCode、AGY 模型选择使用 Host 实际模型目录，并等待后端确认。
+
+思考强度选项以上游实际提供为准。Cursor 每个会话使用独立进程，切换模型不会影响其他会话。
+
+
 ## 端到端加密
 
-Harness 业务流量在 Client 加密，只能由选定的 Host 解密，固定使用
-`Noise_IK_25519_ChaChaPoly_SHA256`。连接必须同时通过同账号 membership 与本地固定的设备
-identity key 校验。服务端可以协调连接并看到必要的网络元数据，但不能读取会话消息、Prompt、
-工具输出、Workspace 路径或 远端文件内容。握手、密钥生命周期、可见元数据、重放保护和
-安全边界详见[端到端加密](docs/end-to-end-encryption.md)。
+Harness 业务流量在 Client 加密，只能由选定的 Host 解密，固定使用 `Noise_IK_25519_ChaChaPoly_SHA256`。
+
+连接必须同时通过同账号 membership 与本地固定的设备 identity key 校验。
+
+服务端可以协调连接并看到必要的网络元数据，但不能读取会话消息、Prompt、工具输出、Workspace 路径或 远端文件内容。
+
+握手、密钥生命周期、可见元数据、重放保护和安全边界详见[端到端加密](docs/end-to-end-encryption.md)。
 
 ### 设备配对（默认强制）🆕
 
@@ -270,25 +291,16 @@ Remote 按 `LAN -> P2P -> TURN -> Relay` 协商路径；
 
 WebRTC 不可用或连接失败时，会降级到加密的 WebSocket Relay。
 
-已建立的路径失败时会关闭，并在新的 transport 与 Noise channel 上重建，不会把活动通道原地
-切换到另一条路径。
 
 所有路径都承载同一份 Noise 密文，并保持相同的 Host/Client 身份边界。
 
-`CONNECTION_FAILED` 可能由 Server 下发，也可能是 Host 的本地兜底；排查时应同时查看日志中的
-`closedBy` 与 `retryable` 字段，不要只凭 code 判断路径。
-
 网络拓扑、控制面与数据面、NAT、降级、重连语义和当前验证状态详见[网络与传输](docs/network.md)。
 
-创建 Harness 工作区可使用 Host 用户权限创建缺失目录，独立于终端开关。路径必须为绝对非根路径；注册失败时保留已创建目录。
-
-OAuth 登录方式由服务端动态提供。使用 `ds-harness-remote login list` 或 `/remote login list` 查看可用扫码方式；新增服务端集成无需再次发布插件。
 
 ## 安全边界
 
 - 会话流量经过端到端加密；服务端只中继密文，不保存会话明文或设备私钥。
 - Server membership 与 Host 本地固定的 peer identity 必须同时授权连接。
-- 身份配对使用二维码与人工输入的确认码两个带外通道；`requireVerifiedPeer` 打开后未配对设备无法建立业务连接。
 - 交互终端使用 Host 本地的 `terminal.enabled`（默认开启），以 Host 用户身份运行，独立于 Agent 审批；
 - 不开放通用工具 RPC 或远程桌面。
 - Workspace 选择器只列出文件夹，并且只返回受限的只读目录元数据。
@@ -318,6 +330,10 @@ OAuth 登录方式由服务端动态提供。使用 `ds-harness-remote login lis
 
 当前基线为 `dsh-v0.2.1-rc.1`，兼容 `0.2.0` rc.2 / rc.1，详见[兼容性说明](docs/compatibility.zh.md)。
 
+Host 插件、随包 Remote 客户端和 Android 已移除 Harness `0.1.1-rc.2` ApiProxy 兼容。请使用提供官方 Typert Remote carrier 的 Host；仅提供 ApiProxy 或不支持能力发现的旧 Host 会被拒绝，不再降级。
+
+CodeX/ACP 保留独立数据面，Desktop 内存投影统一使用 Typert。
+
 **Linux 安装为什么要求 root？**
 
 安装脚本要配置 systemd 系统服务；Host、Agent 工具与远程终端因此具备 root 权限，只应对可信账号开放。
@@ -328,7 +344,13 @@ OAuth 登录方式由服务端动态提供。使用 `ds-harness-remote login lis
 
 **和 frp、内网穿透或远程桌面有什么不同？**
 
-本项目不做端口映射，也不是远程桌面：只把 Harness 原生会话界面映射到远端，不开放通用工具 RPC 与桌面控制，权限与审批仍留在 Host 侧。
+通用端口映射使用Server TCP转发流量，流量需要从Server经过一道，受限于Server端的带宽瓶颈。
+
+本项目使用4层网络模式依次探测，在复杂网络环境下依旧能保持良好的P2P直连。
+
+远程桌面为了满足用户使用需求，需要把整个电脑屏幕获取下来，然后再用户侧重放，整体对上下行带宽和电脑性能都有要求。
+
+本项目只把 Harness 原生会话界面需要的消息加密后传输到远端，不开放通用工具 RPC 与桌面控制，权限与审批仍留在 Host 侧。
 
 ## 文档
 
@@ -370,3 +392,7 @@ OAuth 登录方式由服务端动态提供。使用 `ds-harness-remote login lis
 ## License
 
 [MIT](packages/plugin/LICENSE)
+
+### Remote Agent 工具
+
+在本地 Remote 面板登录后，原生 Harness Agent 可发现在线主机与工作区、创建 Harness 会话、发送任务、读取历史、等待执行、请求中断、下载工作区文件到插件运行的本机，以及将获准发送的本地文件上传到 Harness 工作区。CodeX/ACP 暂仅支持工作区发现。操作回执与投递语义见 [Remote Agent tools](packages/plugin/README.md#remote-agent-tools)。

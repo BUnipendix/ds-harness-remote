@@ -131,7 +131,7 @@ export function mergeHistoryAndLive(history: ChatItem[], live: ChatItem[], throu
       const authoritative = liveSeq > historySeq ? cached : item
       return authoritative.kind === 'message' && cached.kind === 'message'
         ? { ...authoritative, ...(authoritative.feedback === undefined && cached.feedback !== undefined ? { feedback: cached.feedback } : {}),
-            ...(authoritative.role === 'user' && cached.images !== undefined ? { images: cached.images } : {}) }
+            ...(authoritative.role === 'user' && authoritative.images === undefined && cached.images !== undefined ? { images: cached.images } : {}) }
         : authoritative
     }),
     ...live.filter(item => {
@@ -227,7 +227,7 @@ export function mergeReplyReasoning(items: ChatItem[]): ChatItem[] {
 
     const group = groups.get(item.replyGroup) ?? { reasoning: [] }
     groups.set(item.replyGroup, group)
-    const textVisible = hasVisibleText(item.text)
+    const textVisible = hasVisibleText(item.text) || (item.images?.length ?? 0) > 0
     const reasoningVisible = hasVisibleText(item.reasoning ?? '')
 
     if (reasoningVisible) group.reasoning.push(item.reasoning!)
@@ -310,4 +310,25 @@ export function oldestSeq(events: HistoryEntry[]): number | undefined {
     if (Number.isSafeInteger(seq)) oldest = oldest === undefined ? seq : Math.min(oldest, seq)
   }
   return oldest
+}
+
+/**
+ * Distance from the newest row that still counts as "at the latest message".
+ * Follow mode and the jump-to-latest button share this edge, so the button
+ * appears exactly when the viewport has left the turn streaming appends to.
+ */
+export const LATEST_EDGE_PX = 80
+
+/**
+ * Cheap signature of the latest chat item so streaming token deltas trigger auto-scroll
+ * without deep item re-rendering.
+ */
+export function computeStreamingSignature(items: readonly ChatItem[]): string {
+  if (items.length === 0) return ''
+  const last = items[items.length - 1]
+  if (last === undefined) return ''
+  if (last.kind === 'message') {
+    return `${last.id}:${last.text.length}:${last.reasoning?.length ?? 0}:${last.turnEnd ? last.turnEnd.reason : ''}:${last.sendState ?? ''}`
+  }
+  return `${last.id}:${last.kind}`
 }

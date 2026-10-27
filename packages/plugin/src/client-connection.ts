@@ -1,12 +1,10 @@
 import { RemoteClientCore } from '@dsh-remote/client-core'
 import type { RtcPeerConnectionFactory } from '@dsh-remote/webrtc'
 import { AdaptiveTransport } from '@dsh-remote/webrtc'
-import { ApiProxySwitch } from './api-proxy-switch.js'
 import { probeRemoteHostFeatures } from './client-capabilities.js'
 import type {
   ConnectedRemote,
   ConnectionProgressState,
-  RemoteWorkspaceSelection,
   TransportAttempt,
 } from './client-runtime-contract.js'
 import {
@@ -28,7 +26,6 @@ import type { HostIdentity, IdentityStore, TrustedPeer } from './identity-store.
 import type { SafeLogger } from './logging.js'
 import type { ServerHostDevice } from './server-api.js'
 import { ClientServerApi } from './server-api.js'
-import { TypertGatewaySwitch } from './typert-gateway-switch.js'
 import type { WeriftFactoryOptions } from './werift-rtc.js'
 
 /** Collaborates with one ClientModeRuntime; never creates a second session or connection state. */
@@ -40,40 +37,37 @@ export interface ClientConnectionContext {
   readonly config: ResolvedConfig
   readonly rtcFactoryProvider: (options?: WeriftFactoryOptions) => Promise<RtcPeerConnectionFactory | undefined>
   readonly logger: SafeLogger
-  connected: ConnectedRemote | undefined
-  readonly closePreview: () => Promise<void>
-  pendingWorkspaceSelection: RemoteWorkspaceSelection | undefined
-  readonly closeCodexVirtual: (invalidatePending?: boolean) => Promise<void>
-  readonly closeCursorVirtual: () => Promise<void>
-  readonly proxySwitch: ApiProxySwitch | undefined
-  readonly gatewaySwitch: TypertGatewaySwitch
   readonly identities: IdentityStore
 }
 
 export class ClientConnection {
   constructor(private readonly context: ClientConnectionContext) {}
 
-  async connect(targetDeviceId: string, signal?: AbortSignal): Promise<ConnectedRemote> {
+  async connect(targetDeviceId: string, signal?: AbortSignal, options: { background?: boolean } = {}): Promise<ConnectedRemote> {
     signal?.throwIfAborted()
-    const progressRunId = this.context.connectionProgressRun + 1
-    this.context.connectionProgressRun = progressRunId
-    this.context.connectionProgress = { runId: progressRunId, targetDeviceId, phase: 'checking-host' }
+    const progressRunId = options.background ? -1 : this.context.connectionProgressRun + 1
+    if (!options.background) {
+      this.context.connectionProgressRun = progressRunId
+      this.context.connectionProgress = { runId: progressRunId, targetDeviceId, phase: 'checking-host' }
+    }
     const identity = this.context.requireIdentity()
     let client: RemoteClientCore | undefined
+    let closed = false
+    let closeError: Error | undefined
     // Keep cancellation attached through capability discovery as well as the
     // handshake: the candidate is not yet owned by context.connected there.
     const onAbort = () => { void client?.close().catch(() => undefined) }
     signal?.addEventListener('abort', onAbort, { once: true })
     try {
-      const serverDevice = (await this.context.server.listDevices()).find(device => device.deviceId === targetDeviceId)
+      const serverDevice = (await this.context.server.listDevices(signal)).find(device => device.deviceId === targetDeviceId)
       signal?.throwIfAborted()
       if (serverDevice === undefined) {
         throw new ClientModeError('MEMBERSHIP_REQUIRED', 'The selected Host is not authorized for this account.')
       }
       this.updateConnectionProgress(progressRunId, 'authorizing-peer')
-      const target = await this.authorizeHostPeer(serverDevice)
+      const target = await this.authorizeHostPeer(serverDevice, signal)
       signal?.throwIfAborted()
-      const presence = await this.context.server.presenceFor(targetDeviceId)
+      const presence = await this.context.server.presenceFor(targetDeviceId, signal)
       signal?.throwIfAborted()
       if (!presence.online) throw new ClientModeError('HOST_OFFLINE', 'The selected Host is offline.', true)
       const credentials = await this.context.server.authenticate(identity)
@@ -124,10 +118,13 @@ export class ClientConnection {
       let transport: AdaptiveTransport | undefined
       for (const attempt of attempts) {
         webRtcFallback = false
-        const stopProgressTimer = this.beginAttemptProgress(progressRunId, attempt)
+        const stopProgressTimer = options.background ? () => undefined : this.beginAttemptProgress(progressRunId, attempt)
         try {
           transport = createTransport(attempt)
           client = new RemoteClientCore(new ClientSecureTransport(transport, identity, target), 60_000)
+          closed = false
+          closeError = undefined
+          client.onClose(error => { closed = true; closeError = error })
           const attemptClient = client
           signal?.throwIfAborted()
           await attemptClient.connect()
@@ -156,21 +153,6 @@ export class ClientConnection {
         'connected',
         connectedPreference === undefined ? undefined : [connectedPreference],
       )
-      connectedClient.onClose(() => {
-        if (this.context.connected?.client !== connectedClient) return
-        void this.context.closePreview()
-        this.context.connected = undefined
-        this.context.connectionProgress = undefined
-        this.context.pendingWorkspaceSelection = undefined
-        void this.context.closeCodexVirtual()
-        void this.context.closeCursorVirtual()
-        this.context.proxySwitch?.disconnectRemote()
-        this.context.gatewaySwitch.disconnectRemote()
-        void connectedClient.close().catch(() => undefined)
-        this.context.logger.warn('remote Harness transport closed; keeping Remote authority disconnected', {
-          targetDeviceId: shortId(target.deviceId),
-        })
-      })
       const connectionDetails = await connectedTransport.connectionDetails().catch(() => undefined)
       this.context.logger.info('remote Harness transport ready', {
         targetDeviceId: shortId(target.deviceId),
@@ -189,6 +171,7 @@ export class ClientConnection {
       }
       const features = await probeRemoteHostFeatures(connectedClient, serverDevice.clientVersion)
       signal?.throwIfAborted()
+      if (closed) throw closeError ?? new ClientModeError('TRANSPORT_CLOSED', 'The Remote connection closed during discovery.', true)
       return {
         client: connectedClient,
         target,
@@ -200,8 +183,9 @@ export class ClientConnection {
       }
     } catch (error) {
       this.clearConnectionProgress(progressRunId)
+      const failure = closed && closeError !== undefined ? closeError : error
       await client?.close().catch(() => undefined)
-      throw error
+      throw failure
     } finally {
       signal?.removeEventListener('abort', onAbort)
     }
@@ -242,8 +226,9 @@ export class ClientConnection {
     if (this.context.connectionProgress?.runId === runId) this.context.connectionProgress = undefined
   }
 
-  async authorizeHostPeer(serverDevice: ServerHostDevice): Promise<TrustedPeer> {
-    const descriptor = await this.context.server.deviceFor(serverDevice.deviceId)
+  async authorizeHostPeer(serverDevice: ServerHostDevice, signal?: AbortSignal): Promise<TrustedPeer> {
+    const descriptor = await this.context.server.deviceFor(serverDevice.deviceId, signal)
+    signal?.throwIfAborted()
     assertAuthorizedHost(serverDevice, descriptor)
     const existing = this.context.identities.trustedPeer(descriptor.deviceId)
     if (existing !== undefined && existing.publicKey !== descriptor.identityKey) {

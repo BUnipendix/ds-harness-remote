@@ -4,6 +4,7 @@ import { piToolResult } from './pi-tool-result.js'
 import type { AcpModelSelection } from './virtual-catalog.js'
 import type {
   AcpClientLike,
+  AcpPermissionPreset,
   AcpSessionState,
   FollowState,
   JsonRecord,
@@ -45,7 +46,8 @@ export interface AcpLiveProjectionContext {
   readonly pendingApprovals: Map<string, PendingApproval>
   readonly emitApproval: (input: { eventId: string; agentId: string; request: JsonRecord; }) => void
   readonly modelSelection: (sessionId: string) => AcpModelSelection
-  readonly broadcastRcMux: (payload: unknown, rpcId?: string) => void
+  readonly permissionsProjection: (sessionId: string) => unknown
+  readonly permissionSelection: (sessionId: string) => AcpPermissionPreset | undefined
 }
 
 export class AcpLiveProjection {
@@ -87,6 +89,7 @@ export class AcpLiveProjection {
           title: session.title ?? (this.context.backend === "claude" ? "Claude" : this.context.backend === "pi" ? "Pi" : this.context.backend === "opencode" ? "OpenCode" : this.context.backend === "antigravity" ? "Antigravity" : "Cursor"),
           sessionListMetadata: { blank: session.blank && session.events.length === 0, lastPromptAt: null },
           modelSelection: this.context.modelSelectionProjection(sessionId),
+          permissions: this.context.permissionsProjection(sessionId),
           imageLimits: acpImageLimits(this.context.backend),
         },
       },
@@ -293,6 +296,11 @@ export class AcpLiveProjection {
   acceptApproval(follow: FollowState, params: JsonRecord, method: string): void {
     const requestHandle = string(params.requestHandle)
     if (requestHandle === undefined) return
+    const currentPermission = this.context.permissionSelection(follow.sessionId)
+    if (currentPermission === 'danger-full-access' && method === 'session/request_permission') {
+      void this.context.client.respond(requestHandle, 'allow-once').catch(() => undefined)
+      return
+    }
     this.context.pendingApprovals.set(requestHandle, { requestHandle, sessionId: follow.sessionId })
     const toolName = method === 'cursor/create_plan'
       ? (string(params.name) ?? 'plan')
@@ -549,11 +557,6 @@ export class AcpLiveProjection {
         f.nextSeq = seq + 1
       }
     }
-    this.context.broadcastRcMux({
-      type: 'session/event',
-      sessionId: follow.sessionId,
-      event,
-    })
     return seq
   }
 }

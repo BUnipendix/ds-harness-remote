@@ -1,10 +1,10 @@
 ## 版本兼容
 
-## 当前兼容目标（2026-10-17）
+## 当前兼容目标（2026-10-25）
 
 当前适配基线为 `dsh-v0.2.1-rc.1`，保留上一版 `dsh-v0.2.0-rc.2`（以及 rc.1）的官方 Typert / Session V3 接入。peer range 明确接纳 `0.2.1` 与 `0.2.2` 的 alpha/beta/RC 和正式版；后续 `0.2.2` RC 在官方 carrier 契约不变时无需仅为版本号改包。未来版本尚未发布，范围接纳不等于已完成其 runtime 验证。
 
-按用户要求，legacy rc.2 ApiProxy 不再作为兼容维护目标；已有实现和历史类型暂时保留，本次没有升级或扩展其接口。旧版 Typert/settings 分支同样不作为本轮验收目标。
+Host 插件、随包 Remote 客户端和 Android 已移除 Harness `0.1.1-rc.2` ApiProxy 兼容。请使用提供官方 Typert Remote carrier 的 Host；仅提供 ApiProxy 或不支持能力发现的旧 Host 会被拒绝，不再降级。CodeX/ACP 保留独立数据面，Desktop 内存投影统一使用 Typert。本轮不改独立 VS Code Client 或独立 Remote Web 仓库。
 
 新版问答通过固定 `userQuestions/attachWait` stream 认领前台倒计时，通过 `$events/result` 回传窗口内回答或 `ASK_TIMED_OUT`；超时后仅根据官方 `userQuestions` projection 恢复可补答问题，补答走 `userQuestions/answer`，断线不重放输入。上一版 RC 的无限期问答保持原事件路径。
 
@@ -16,13 +16,13 @@ RC.1 原生终端的 `terminal/attach` 双向流在本地转换为既有 Remote 
 
 验证覆盖 RC.1 npm 实现的真实 Gateway/Peer 隔离、核心终端状态转换、全仓类型检查、自动化测试、生产构建（含 Android Hermes 导出）与 DSH bundle 校验。Desktop UI、Android APK/原生真机、独立 Remote Web 和加密跨设备 E2E 尚待验收。
 
-2026-10-17 启动兼容补充（未发布）：RC.1 主题模块会直接读取新增字体字段，旧 `0.2.0-rc.2` Host 的合法 `ui-theme` 配置缺少这些字段时，会在主题初始化抛出 `undefined.split` 并阻塞依赖模块。Remote 在设置读取及成功写入的返回视图中补齐缺失显示默认值，不修改 Host schema、revision、持久化配置或写入授权。旧 Host 不支持的新字体设置仍可能被其拒绝。已用本机安装的官方 RC.1 主题 bundle 复现异常并验证修复后的初始化、旧 schema 校验与返回结果保真；Plugin check/build、相关 20 个 Gateway 测试和 bundle 校验通过，真实跨设备启动恢复尚未验收。
+2026-10-17 启动兼容补充：RC.1 主题模块会直接读取新增字体字段，旧 `0.2.0-rc.2` Host 的合法 `ui-theme` 配置缺少这些字段时，会在主题初始化抛出 `undefined.split` 并阻塞依赖模块。Remote 在设置读取及成功写入的返回视图中补齐缺失显示默认值，不修改 Host schema、revision、持久化配置或写入授权。旧 Host 不支持的新字体设置仍可能被其拒绝。已用本机安装的官方 RC.1 主题 bundle 复现异常并验证修复后的初始化、旧 schema 校验与返回结果保真；Plugin check/build、相关 20 个 Gateway 测试和 bundle 校验通过，真实跨设备启动恢复尚未验收。
 
 ## 历史实现记录（不代表当前维护承诺）
 
 **破坏性更新声明：** Plugin `0.4.1` 已移除早期实验性的 Remote 业务 RPC
 （`sessions.*`、`session.*`、`permissions.respond`、`sync.from`）。Harness
-会话流量现在只通过官方 rc.2 `ApiProxy` 或 v0.1.2 Typert Remote Gateway 承载；
+该版本的会话流量通过官方 rc.2 `ApiProxy` 或 v0.1.2 Typert Remote Gateway 承载；
 本插件不提供旧 RPC 的适配层或 wire format 翻译。
 
 Plugin `0.5.0` 主要用于兼容 DeepSeek Harness `dsh-v0.2.0-rc.2`，同时保留 `dsh-v0.1.7-rc.1`，并保留

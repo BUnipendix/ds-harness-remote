@@ -3,7 +3,7 @@ import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-nat
 import { WebView } from 'react-native-webview'
 import { CirclePlus } from 'lucide-react-native'
 import { requireSessionTools } from '../state/store'
-import { createNativeRpcId } from '../services/api-proxy'
+import { createNativeRpcId } from '../services/rpc-id'
 import { TerminalAttachment } from '../services/terminal-attachment'
 import type { TerminalInfo } from '../services/session-tools'
 import { terminalHtml } from '../generated/terminal-html'

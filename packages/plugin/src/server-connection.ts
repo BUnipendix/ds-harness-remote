@@ -132,7 +132,7 @@ export class HostServerConnection {
     private readonly logger: SafeLogger,
     private readonly createWebSocket: WebSocketFactory = url => new WebSocket(url) as unknown as WebSocketLike,
     private readonly rtcFactoryProvider?: () => Promise<RtcPeerConnectionFactory | undefined>,
-    private readonly hostCapabilities: () => readonly string[] = () => ['harness.api.v1'],
+    private readonly hostCapabilities: () => readonly string[] = () => [],
     private readonly harnessVersion?: string,
   ) {}
 

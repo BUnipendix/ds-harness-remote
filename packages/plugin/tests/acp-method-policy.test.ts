@@ -9,6 +9,7 @@ describe('ACP method policy', () => {
       'dsh/toolCall',
       'dsh/sessionModels',
       'dsh/selectModel',
+      'dsh/selectPermission',
       'initialize',
       'session/new',
       'session/load',

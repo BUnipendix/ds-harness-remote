@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
+import type { ControlResult } from '../src/control-result.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { HostAuthorizationControl, HostConnectionHandle } from '../src/client-runtime.js'
 import type { ClientModeRuntime } from '../src/client-runtime.js'
@@ -419,7 +419,7 @@ describe('PluginControlRuntime settings setup', () => {
 })
 
 function register(runtime: PluginControlRuntime) {
-  let handler: ((endpoint: string, payload: unknown, signal: AbortSignal) => Promise<RpcResult<unknown>>) | undefined
+  let handler: ((endpoint: string, payload: unknown, signal: AbortSignal) => Promise<ControlResult<unknown>>) | undefined
   let channel: string | undefined
   runtime.register({
     rpc: {

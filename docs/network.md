@@ -166,11 +166,13 @@ Host 的 Control WebSocket 支持带 jitter 的指数退避重连。单条逻辑
 
 1. 未完成 tunnel RPC 失败；
 2. 原生 mux/host 或 Typert Remote stream 关闭；
-3. Desktop Remote 退出活动数据面并回落 Local；
+3. Desktop Remote 保留所选 Host 的 authority，离线请求失败，不回落 Local；
 4. 再次连接时重新完成 membership/trust 校验、选路和 Noise 握手；
 5. 由官方 Harness UI 重开 stream 并重新读取 history baseline。
 
-当前项目不维护另一套业务 event replay buffer，也不会自动重放结果未知的 Harness mutation。完整的网络切换 UI、心跳/RTT、重连后的 stream 自动重开仍是待完成工作。
+Desktop Harness Remote 使用现有 `reconnect` 配置自动重建断开的连接：默认带 jitter 的指数退避，每次重新校验 membership、固定的 Host key、选路和 Noise 握手。恢复后通知官方 Connection 重开原生订阅，不刷新页面或重发 Prompt、审批、终端输入。退出 Remote、注销、切换 Host 或停止插件会取消等待和在途连接；身份/权限异常、加密校验失败及 `CONNECTION_REPLACED`（WebSocket 4003）停止自动恢复。`reconnect: false` 同时禁用此自动恢复。
+
+当前项目不维护另一套业务 event replay buffer，也不会自动重放结果未知的 Harness mutation。CodeX/ACP 的独立虚拟工作区仍需手动重新打开，不会在掉线后自动切换到 Harness。完整的网络切换 UI、心跳/RTT，以及真机上的恢复体验仍需验证。
 
 ### 断开来源与 `CONNECTION_FAILED`
 

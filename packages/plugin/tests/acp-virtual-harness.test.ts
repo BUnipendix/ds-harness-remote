@@ -453,7 +453,7 @@ describe('AcpVirtualHarness', () => {
     await target.close()
   })
 
-  it('maps ApiProxy approval outcomes to ACP respond decisions', async () => {
+  it('maps Typert approval outcomes to ACP respond decisions', async () => {
     const client = fakeAcp()
     const target = new AcpVirtualHarness(client, { deviceId: 'host-1', name: 'Host' })
     await target.selectOrCreateWorkspace('/workspace/repo')
@@ -465,12 +465,8 @@ describe('AcpVirtualHarness', () => {
     ;(target as unknown as { pendingApprovals: Map<string, { requestHandle: string; sessionId: string }> })
       .pendingApprovals.set('req_1', { requestHandle: 'req_1', sessionId: 'cursor:acp_1' })
 
-    await expect(target.api.respond({
-      type: 'client-response',
-      rpcId: 'req_1' as never,
-      result: { ok: true, value: 'allowed-once' },
-    })).resolves.toEqual({ accepted: true })
-    expect(client.respond).toHaveBeenCalledWith('req_1', 'allow-once')
+    await expect(target.dispatch('$events/result', { args: { eventId: 'req_1', outcome: { kind: 'result', value: 'allowed-once' } } }, new AbortController().signal)).resolves.toMatchObject({ ok: true })
+    expect(client.respond).toHaveBeenCalledWith('req_1', 'allow-once', undefined, expect.any(AbortSignal))
     await target.close()
   })
 
@@ -1043,4 +1039,87 @@ describe('AcpVirtualHarness', () => {
     } finally { await agy.close(); await cursor.close() }
   })
 
+  it('projects and toggles ACP permission presets and auto-approves requests under danger-full-access', async () => {
+    let onFrame!: (frame: AgentAcpFrameData) => void
+    const client = {
+      ...fakeAcp(),
+      openStream: vi.fn(async (_id: string, handler: typeof onFrame) => { onFrame = handler; return { close: async () => undefined } }),
+      respond: vi.fn(async () => ({})),
+      selectPermission: vi.fn(async () => ({})),
+    }
+    const target = new AcpVirtualHarness(client, { deviceId: 'host', name: 'Host' }, 'opencode')
+    const signal = new AbortController().signal
+    try {
+      const workspace = await target.selectOrCreateWorkspace('/test')
+      const sessionId = workspace.sessionIds[0]!
+      const request = { sessionId }
+
+      const initial = await target.dispatch('session/projections', { args: { request } }, signal)
+      expect(initial).toMatchObject({
+        ok: true,
+        value: {
+          values: {
+            permissions: {
+              options: [
+                { value: 'workspace-write' },
+                { value: 'danger-full-access' },
+              ],
+              currentValue: 'Host settings (not reported)',
+            },
+          },
+        },
+      })
+
+      const commands = await target.dispatch('commands/list', { args: { request } }, signal)
+      expect(commands).toMatchObject({ ok: true, value: [{ name: 'permission' }] })
+
+      const switchResult = await target.dispatch('commands/execute', { args: { agentId: sessionId, line: '/permission danger-full-access', images: [] } }, signal)
+      expect(switchResult).toMatchObject({ ok: true, value: { result: { kind: 'success', text: 'preset danger-full-access' } } })
+      expect(client.selectPermission).toHaveBeenCalledWith('remote-history', 'opencode', 'danger-full-access')
+
+      const updated = await target.dispatch('session/projections', { args: { request } }, signal)
+      expect(updated).toMatchObject({
+        ok: true,
+        value: {
+          values: {
+            permissions: {
+              currentValue: 'danger-full-access',
+            },
+          },
+        },
+      })
+
+      const followStream = await target.open('session/follow', { args: { request } }, signal)
+      const iterator = followStream[Symbol.asyncIterator]()
+      await iterator.next()
+
+      onFrame({
+        frame: {
+          method: 'session/request_permission',
+          params: {
+            requestHandle: 'handle_1',
+            toolName: 'bash',
+            reason: 'execute command',
+          },
+        },
+      } as AgentAcpFrameData)
+
+      expect(client.respond).toHaveBeenCalledWith('handle_1', 'allow-once')
+
+      await target.dispatch('commands/execute', { args: { agentId: sessionId, line: '/permission workspace-write', images: [] } }, signal)
+      const reverted = await target.dispatch('session/projections', { args: { request } }, signal)
+      expect(reverted).toMatchObject({
+        ok: true,
+        value: {
+          values: {
+            permissions: {
+              currentValue: 'workspace-write',
+            },
+          },
+        },
+      })
+    } finally {
+      await target.close()
+    }
+  })
 })

@@ -2,17 +2,13 @@ import { WorkspaceUploadHost } from './workspace-upload.js'
 import { workspaceUploadRootResolver } from './workspace-upload-authority.js'
 import { LoopbackHost } from './loopback-host.js'
 import { TerminalPolicy } from './terminal-policy.js'
-import { randomUUID } from 'node:crypto'
-import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy/api'
 import { createEvent, type RemoteWorkspaceTypeDescription } from '@dsh-remote/protocol'
 import { ConnectionController } from './connection-controller.js'
 import type { ResolvedConfig } from './config.js'
 import type { HostIdentity, IdentityStore } from './identity-store.js'
 import {
   harnessSessionGeneration,
-  normalizeHarnessVersion,
   readHarnessDistributionVersion,
-  selectHarnessVersion,
 } from './harness-version.js'
 import type { SafeLogger } from './logging.js'
 import { RpcRouter } from './rpc-router.js'
@@ -28,7 +24,6 @@ import {
 } from './server-api.js'
 import { HostServerConnection } from './server-connection.js'
 import { ServerCredentialStore } from './server-credentials.js'
-import { HarnessApiBridge, type TypertGatewayLike } from './harness-api-bridge.js'
 import { HarnessRemoteBridge } from './harness-remote-bridge.js'
 import type { PluginRouteDispatcher } from './plugin-route-bridge.js'
 import { PluginRouteBridge } from './plugin-route-bridge.js'
@@ -87,7 +82,6 @@ export class HostPluginRuntime {
   constructor(
     private readonly config: ResolvedConfig,
     private readonly identities: IdentityStore,
-    private readonly apiProxy: ApiProxy | undefined,
     private readonly logger: SafeLogger,
     private readonly localGateway?: LocalTypertGateway,
     private readonly fileViewerHost?: () => FileViewerHostServiceLike | undefined,
@@ -101,16 +95,6 @@ export class HostPluginRuntime {
     this.acp = new AcpRemoteGateway(config.acp ?? { enabled: false, backends: [] }, logger, undefined, undefined, () => this.terminalEnabled, this.terminalSpawner)
     this.connections = new ConnectionController(this.identities, (context, send) => {
       const peerGateway = this.localGateway?.createPeer?.() ?? this.localGateway
-      const harnessApi = this.apiProxy === undefined
-        ? undefined
-        : new HarnessApiBridge(
-            this.apiProxy,
-            (event, data) => send(createEvent(event, data)),
-            undefined,
-            this.logger,
-            peerGateway as TypertGatewayLike | undefined,
-            this.harnessVersion,
-          )
       const harnessRemote = peerGateway?.supportsCarrier === true
         ? new HarnessRemoteBridge(
             peerGateway,
@@ -144,7 +128,6 @@ export class HostPluginRuntime {
       const dispatcher = this.pluginRoutes?.(peerGateway?.peer)
       const pluginRoute = dispatcher === undefined ? undefined : new PluginRouteBridge(dispatcher, this.logger)
       return new RpcRouter(
-        harnessApi,
         undefined,
         this.logger,
         fileViewer,
@@ -161,7 +144,7 @@ export class HostPluginRuntime {
           () => harnessSessionGeneration(this.harnessVersion) === 'v3',
           threadId => this.codex.resolveThreadWorkspace(context.connectionId, threadId),
           sessionId => this.acp.resolveUploadWorkspace(context.connectionId, sessionId),
-        )),
+        ), undefined, context.transportMode),
       )
     }, this.logger)
     if (config.serverUrl !== undefined) {
@@ -216,7 +199,7 @@ export class HostPluginRuntime {
       this.serverApi.setHarnessVersion(this.harnessVersion)
       this.serverApi.bindIdentity(this.identity)
       this.serverConnection = this.createServerConnection(this.identity)
-      this.serverConnection.start()
+      if (this.config.hostControl?.enabled !== false) this.serverConnection.start()
     }
   }
 
@@ -508,26 +491,9 @@ export class HostPluginRuntime {
   }
 
   private async readHarnessVersion(): Promise<string | undefined> {
-    let reportedVersion: string | undefined
-    let errorCode: string | undefined
-    try {
-      const response = await this.apiProxy?.host.describe({ rpcId: randomUUID() as never, payload: {} })
-      if (response === undefined) throw new Error('ApiProxy is unavailable')
-      if (!response.result.ok) {
-        errorCode = response.result.error.code
-      } else {
-        reportedVersion = normalizeHarnessVersion(response.result.value.version)
-      }
-    } catch {
-      // Older Harness builds may not expose host.describe.
-    }
-    const distributionVersion = reportedVersion === undefined || reportedVersion === '0.0.1'
-      ? await readHarnessDistributionVersion()
-      : undefined
-    const version = selectHarnessVersion(reportedVersion, distributionVersion)
-    if (version !== undefined) return version
-    this.logger.warn('Harness version is unavailable', errorCode === undefined ? undefined : { code: errorCode })
-    return undefined
+    const version = await readHarnessDistributionVersion()
+    if (version === undefined) this.logger.warn('Harness version is unavailable')
+    return version
   }
 
   private hostCapabilities(): string[] {
@@ -540,9 +506,6 @@ export class HostPluginRuntime {
       )
     }
     if (this.localGateway?.supportsCarrier && this.terminalEnabled) capabilities.push('harness.terminal.v1')
-    if (this.apiProxy !== undefined) {
-      capabilities.push('harness.api.v1', 'harness.api.transfer.v1')
-    }
     if (this.fileViewerHost?.() !== undefined) capabilities.push('fileviewer.read.v1')
     if (this.pluginRoutes?.() !== undefined) capabilities.push('plugin.route.v1')
     if (this.codex.isAvailable()) capabilities.push('codex.appserver.v1', 'codex.appserver.transfer.v1')

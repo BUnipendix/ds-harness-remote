@@ -1,12 +1,12 @@
 # TODO
 
-更新日期：2026-10-24。当前内部待发布版本统一为 `0.5.19`，Android `versionCode 64`，Expo iOS `buildNumber 64`；尚未为此版本创建 Tag 或 Release。
+更新日期：2026-10-27。当前源码版本为 `0.5.21`，Android `versionCode 66`，Expo iOS `buildNumber 66`；Tag、npm 与 GitHub Release 状态以实际发布结果为准。
 
-本次全仓 check 与 794 tests 通过（Plugin 407、Android 195；7+78+1+12+44+43+7+407+195=794）。生产 build（含 Android Hermes export）与 DSH bundle 校验通过，未新增原生真机或跨设备验收；既有 Metro noble/hashes exports fallback 警告仍保留。
+最近一次构建验证见 [AGENTS.md 的 0.5.20 合并后重建记录](../AGENTS.md#post-merge-0520-rebuild-2026-10-27)：全仓 check、847 tests、串行生产 build（含 Android Hermes）、DSH bundle 与打包检查通过。这是既有验证记录，本轮文档清理未重新运行；未新增 APK、原生真机或跨设备验收。Metro noble/hashes exports fallback 警告仍保留。
 
 Harness `0.2.1-rc.1` 为开发基线。保留 `0.2.0-rc.2` / rc.1 的官方 Typert Session V3。
 peer range 接纳 `0.2.2` 预发布版。版本范围不代表 runtime 验收通过。
-legacy ApiProxy 不再作为兼容维护目标，已有实现仅保留。
+Host 插件、随包 Remote 客户端和 Android 已移除 Harness `0.1.1-rc.2` ApiProxy 兼容。请使用提供官方 Typert Remote carrier 的 Host；仅提供 ApiProxy 或不支持能力发现的旧 Host 会被拒绝，不再降级。CodeX/ACP 保留独立数据面，Desktop 内存投影统一使用 Typert。本轮不改独立 VS Code Client 或独立 Remote Web 仓库。
 完整 Server、Remote Web 和 Admin 在独立 Server 仓库实现。
 本仓库 `apps/server` 提供最小单账号 Relay Server。
 
@@ -25,9 +25,11 @@ RC.1 的源码适配与本地自动化验证见兼容性说明；不能替代真
 - [ ] 真机/跨设备验收：ds-bot 0.2.0 创建/删除、群聊实时与历史、会话换段、卡片提交、断线恢复、主机切换、键盘和大屏布局。
 - [ ] Bot 专属文案补齐简中/英文之外的语言；当前其他语言回退英文。
 
-## 2026-10-22 原生自动化任务
+## 原生自动化任务（2026-10-27 更新）
 
 - [x] 放行官方 schedule/history、schedule/update、schedule/delete，复用既有列表和事件 carrier。
+- [x] Android 已合并自动化任务列表、搜索/状态筛选、规则/记录查看、删除及会话入口（#176）；不代表已完成真机验收。
+- [ ] Android 自动化任务、文件选择器（#174）、新会话防抖（#175）与息屏恢复改进（#172）的原生真机及跨设备回归。
 - [ ] 更新 Host 插件后，在真实 Desktop/浏览器远程连接中验收任务修改、删除、历史分页和跨 Client 变更刷新；本地契约验证不等于跨设备验收。
 
 ## 2026-10-21 移动端精简历史
@@ -115,11 +117,11 @@ transport 状态机；普通 UI、文案和辅助脚本不单独补测试。
 - [x] Relay control、标准 Noise IK、counter/replay 拒绝与 opaque ciphertext
 - [x] Desktop Plugin Host runtime、Settings 配置和 GitHub/npm Bundle 入口
 - [x] dsh-TUI profile 在无 Desktop `connection` 服务时默认启动 Host，并通过原生 `/remote` 的 `login [github|zhihu]`、`status`、`logout` 完成终端授权和状态管理；`ds-harness-remote` 保留为启动前 CLI
-- [x] Host ApiProxy allowlist bridge、mux/host stream 与后台 Local/Remote ApiProxy switch
-- [x] Harness v0.1.2 alpha.1–rc.1 Typert Remote unary/stream/event carrier、固定 endpoint allowlist、加密 capability 探测与 legacy ApiProxy 激活兼容
+- [x] 历史 Host ApiProxy bridge 与 switch（2026-10-25 已移除）
+- [x] Harness v0.1.2 alpha.1–rc.1 Typert Remote unary/stream/event carrier、固定 endpoint allowlist、加密 capability 探测；rc.2 ApiProxy 激活分支已移除
 - [x] Harness v0.1.5 rc.1 / v0.2.0 rc.1 Session V3 capability、严格 surface replacement、Assistant stream 与 v0.1.2/V3 mutation 前混连拒绝
 - [x] 升级官方依赖到 `dsh-v0.2.0-rc.1`，修正 0.2.0 版本判断、Workspace payload 与原生 UI allowlist，并完成 Plugin 核心回归测试
-- [x] Android 与 VS Code Client 按 Host capability 在 rc.2 ApiProxy 和 v0.1.2 Typert Remote 之间选择数据面
+- [x] 历史 Android / VS Code 双数据面接入（2026-10-25 Android 已移除 rc.2，VS Code 暂保留）
 - [x] Remote 模态框、主机自过滤、OS/Harness/Plugin 版本展示、远端 Workspace 与目录选择
 - [x] Remote Header、LAN/P2P/TURN/Relay 链路、端到端加密状态与退出入口
 - [x] 配合 dsh-file-viewer 的远端只读文件 stat/list/分块预览桥与 Client provider
@@ -144,7 +146,7 @@ transport 状态机；普通 UI、文案和辅助脚本不单独补测试。
 - [x] 用两台真实 Harness + 外部 Server 跑通同账号授权、选择 Remote、创建/继续会话
 - [x] 验证原生 mux/host stream、approval/question respond 与断线关闭行为
 - [x] 用手机 Web 与电脑 Web 同时连接一个真实 Host，验证并发操作、同设备重连和流隔离
-- [ ] 验证 allowlist 覆盖官方 UI 的必需方法；允许已认证 Remote peer 通过官方 seam 管理 Host 实时注册的 settings 命名空间与全局 credential 引用（credential 值只写），并保持 `settings.openDocument`、native path、目录写入、任意文件访问、attachment upload 和 download 禁止
+- [ ] 验证 allowlist 覆盖官方 UI 的必需方法；允许已认证 Remote peer 通过官方 seam 管理 Host 实时注册的 settings 命名空间与全局 credential 引用（credential 值只写），并保持 `settings.openDocument`、native path、任意文件访问及通用 attachment upload/download 禁止；官方 `workspace/create` 目录创建和独立 `workspace.upload.v1` 按协议限定范围
 - [x] 用两台真实 Harness 验证 dsh-file-viewer 文本、图片、PDF、大文件分块与断线回落
 - [ ] 在 macOS、Windows、Linux 验证 native picker 只读目录兜底、symlink、权限错误和大目录截断
 - [ ] 完善账号过期、`DEVICE_OWNERSHIP_REQUIRED` 和 legacy owner 的显式恢复体验
@@ -194,7 +196,7 @@ Codex 属于同一个 Remote Plugin，但在 Plugin 内保持独立业务领域�
 - [x] Android 接入 CodeX 模型与 reasoning、固定权限预设、系统图片选择器 Prompt、interrupt 和单次命令/文件审批
 - [x] 在 Remote 工作区选择器中增加 CodeX 虚拟工作区入口，不增加本地入口或独立页面
 - [x] Desktop 与 Android 增加 CodeX Workspace 创建入口，通过固定 `project/create` 白名单新增经 Host 校验的真实目录
-- [x] 增加 rc.2 ApiProxy / v0.1.2 Typert 内存虚拟载体，将 CodeX History/live 映射为原生 Session 事件
+- [x] 增加 Typert 内存虚拟载体（旧 rc.2 投影已移除），将 CodeX History/live 映射为原生 Session 事件
 - [x] 将 reasoning/plan delta、command/file/MCP progress、Thread status、model reroute 与 Web Search/Subagent/Image/Compaction/Review Mode Item 投影到原生 chunk、状态、projection 和工具卡片
 - [x] 将新建空 Thread 稳定挂载到当前 CodeX Workspace，并增加 Host 端消息边界 History 分页与 Client 端 Session 元数据搜索
 - [x] 复用 DSH 原生 Workspace/Session 列表、Conversation Renderer、Composer、工具与审批 UI
@@ -211,7 +213,6 @@ Codex 属于同一个 Remote Plugin，但在 Plugin 内保持独立业务领域�
 
 ## P0：协议与安全
 
-2026-10-16 WSL 核对结果见[协议与 Relay 验证报告](protocol-validation-2026-10-16.md)。
 本地集成验证不替代真实跨设备验收。
 
 - [ ] 将 `packages/protocol` 与 `docs/protocol.md` 的 Control、Account Authorization、Connect、Relay、ApiProxy tunnel、Error 和 Limits schema 逐项对齐
@@ -299,7 +300,7 @@ capability 探测，以及 Host → Workspace → Session 层级导航、Prompt�
 
 ## Android Client（主链路已完成）
 
-`apps/android` 已迁移到当前 rc.2 ApiProxy / v0.1.2 Typert Remote 双数据面，并接入可选 CodeX Remote：账号登录注册、成员设备列表与 identity key
+`apps/android` 当前仅使用 Typert Remote Harness 数据面，并接入可选 CodeX Remote：账号登录注册、成员设备列表与 identity key
 固定、Adaptive transport + Noise secure channel、`harness.api.*` 或 `harness.remote.*`
 tunnel 与 mux/Gateway frame 聊天。功能已对标 Web 端 Remote 控制台：新建/继续/归档会话、历史分页、
 模型目录与切换、相册图片 Prompt（Host limits 预检 + transfer 分块）、Workspace 管理（创建+只读目录浏览/重命名/删除/排序）、连接详情面板与
@@ -321,13 +322,13 @@ interrupt 与单次审批，不恢复旧 Android RPC。剩余工作：
 - [ ] 在 Android 原生 runtime 执行跨端 conformance（Node 中共享协议测试不作为原生验收）
 
 `apps/android` 与 Mock Host 曾作为旧 Remote RPC 原型冻结；现在 Android 直接实现/消费官方
-ApiProxy / Typert Remote contract，不得在 Plugin Host 恢复 `sessions.*`、`session.send`、
+Typert Remote contract，不得在 Plugin Host 恢复 `sessions.*`、`session.send`、
 `permissions.respond` 或 `sync.from`。
 
 ## 不在本仓库实现
 
 - 完整多账号 Server、Remote Web、Admin runtime 及其数据库、队列和部署代码（`apps/server` 最小自部署版本除外）
-- 绕过官方 Session 文件系统或 dsh-file-viewer provider 的任意文件访问、独立文件写入 RPC、远程桌面或通用 Harness tool RPC；用户明确授权的原生 terminal 和受限 loopback 预览除外
+- 绕过官方 Session 文件系统或 dsh-file-viewer provider 的任意文件访问、独立文件写入 RPC、远程桌面或通用 Harness tool RPC；用户明确授权的原生 terminal、受限 loopback 预览、`workspace.upload.v1` 及官方 `workspace/create` 目录创建除外，边界以协议为准
 - 绕过 ApiProxy allowlist 的 Cordis service 反射
 
 ## 第一版完成标准
@@ -356,6 +357,7 @@ ApiProxy / Typert Remote contract，不得在 Plugin Host 恢复 `sessions.*`、
 - [ ] 验证 Windows/Linux PTY、shell 配置、resize 与 job control。单独记录 pipe fallback 限制。
 - [ ] 验证无窗口持有者与 follower 时的两小时 idle 回收。验证活跃终端保持运行。
 - [x] 白名单 IPv4 loopback HTTP/WebSocket 通道与独立本机预览 origin
+- [ ] 接入 Harness 浏览器地址解析前的异步导航扩展点，将远程模式下的 localhost/端口输入转为已授权的 Remote 预览 URL。当前仅有后端 preview.open，无前端入口；暂时隐藏远程模式下原生侧栏开始页的浏览器入口，避免误访问 Desktop 本机。此隐藏不禁用已有浏览器标签页、快捷键或聊天链接打开。
 - [x] Relay 背压、串行加密发送、有界 stream 消费队列
 - [ ] Windows/Linux 真机、跨机高延迟 Relay、大输出终端、多设备回归
 - [ ] 真实应用复杂 HMR、硬编码 localhost、Cookie/CSP 和浏览器兼容性回归
@@ -367,6 +369,7 @@ ApiProxy / Typert Remote contract，不得在 Plugin Host 恢复 `sessions.*`、
 - [x] Harness 会话工作区目录浏览、UTF-8 分页只读预览；不支持的 Host 显示更新提示
 - [x] Android 本地 xterm 终端、创建/恢复/结束、归属与输入权隔离、序号检查和断线不重放
 - [ ] 真机验证新旧 DSH 权限切换、Host 热开启/关闭终端、跨机重连、Windows 路径与 shell、长输出、IME/TalkBack/大字体
+- [ ] #159 Android 历史附件与 Markdown 工作区图片真机/跨设备验收：Typert 大图、AI/工具图片、全屏、取消与重连；单独复现并定位 PNG 发送报错。
 - [ ] Android 图片/PDF/Office 只读预览真实 Host 与真机验收：大文件、转换超时/字体缺失、取消与断线、内存峰值、分页缩放
 - [ ] PDF 文本选择与 TalkBack 验收（当前已有受限文本叠层，真机未验证）
 

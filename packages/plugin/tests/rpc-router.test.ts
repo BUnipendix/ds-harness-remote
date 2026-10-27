@@ -1,7 +1,7 @@
 import { runScenarios } from '../../../scripts/test-scenarios.mjs'
 import { createRpcRequest, type RemoteWorkspaceTypeDescription } from '@dsh-remote/protocol'
 import { describe, expect, it, vi } from 'vitest'
-import type { HarnessApiBridge } from '../src/harness-api-bridge.js'
+import type { HarnessRemoteBridge } from '../src/harness-remote-bridge.js'
 import type { RemoteFileViewerBridge } from '../src/file-viewer-bridge.js'
 import type { SafeLogger } from '../src/logging.js'
 import { RpcRouter } from '../src/rpc-router.js'
@@ -9,13 +9,26 @@ import type { PluginRouteBridge } from '../src/plugin-route-bridge.js'
 import type { CodexPeerBridge } from '../src/codex/peer-bridge.js'
 
 describe('RpcRouter', () => {
-  it('forwards only native ApiProxy traffic', async () => {
+  it('rejects every retired ApiProxy entry point without invoking the Typert bridge', async () => {
+    const call = vi.fn()
+    const router = createRouter({ call })
+    await runScenarios(['call', 'respond', 'stream.open', 'stream.close', 'transfer.open', 'transfer.chunk', 'transfer.commit', 'transfer.read', 'transfer.close'].map(suffix => ({
+      name: suffix, run: async () => {
+        const result = await router.handle(createRpcRequest(`harness.api.${suffix}` as Parameters<typeof createRpcRequest>[0], {}))
+        expect(result).toMatchObject({ type: 'rpc.error', payload: { code: 'METHOD_NOT_FOUND' } })
+      },
+    })))
+    expect(call).not.toHaveBeenCalled()
+    const description = await router.handle(createRpcRequest('harness.transport.describe', {}))
+    expect((description.payload as { result: { capabilities: string[] } }).result.capabilities.some(value => value.startsWith('harness.api.'))).toBe(false)
+  })
+  it('forwards only native Typert traffic', async () => {
     const call = vi.fn(async () => ({ rpcId: 'native-1', result: { ok: true, value: [] } }))
     const router = createRouter({ call })
-    const response = await router.handle(createRpcRequest('harness.api.call', {
-      method: 'session.list', rpcId: 'native-1', payload: {},
+    const response = await router.handle(createRpcRequest('harness.remote.call', {
+      endpoint: 'session/list', payload: { args: {} },
     }))
-    expect(call).toHaveBeenCalledWith({ method: 'session.list', rpcId: 'native-1', payload: {} })
+    expect(call).toHaveBeenCalledWith({ endpoint: 'session/list', payload: { args: {} } })
     expect(response).toMatchObject({ type: 'rpc.response', payload: { result: { rpcId: 'native-1' } } })
 
     const legacy = await router.handle({
@@ -53,10 +66,10 @@ describe('RpcRouter', () => {
     const openTransfer = vi.fn(() => ({ opened: true, transferId: 'image-1' }))
     const appendTransfer = vi.fn(() => ({ accepted: true, transferId: 'image-1', index: 0 }))
     const router = createRouter({ openTransfer, appendTransfer })
-    const opened = await router.handle(createRpcRequest('harness.api.transfer.open', {
+    const opened = await router.handle(createRpcRequest('harness.remote.transfer.open', {
       transferId: 'image-1', totalBytes: 3, totalChunks: 1,
     }))
-    const chunked = await router.handle(createRpcRequest('harness.api.transfer.chunk', {
+    const chunked = await router.handle(createRpcRequest('harness.remote.transfer.chunk', {
       transferId: 'image-1', index: 0, data: 'YWJj',
     }))
     expect(openTransfer).toHaveBeenCalledOnce()
@@ -89,13 +102,13 @@ describe('RpcRouter', () => {
     } as unknown as SafeLogger
     const router = createRouter({ call: vi.fn(async () => { throw new Error(secret) }) }, undefined, logger)
 
-    const response = await router.handle(createRpcRequest('harness.api.call', {
+    const response = await router.handle(createRpcRequest('harness.remote.call', {
       method: 'session.list', rpcId: 'native-secret', payload: {},
     }))
 
     expect(response).toMatchObject({ type: 'rpc.error', payload: { code: 'INTERNAL_ERROR' } })
     expect(logger.warn).toHaveBeenCalledWith('host rpc failed', expect.objectContaining({
-      method: 'harness.api.call',
+      method: 'harness.remote.call',
       code: 'INTERNAL_ERROR',
     }))
     expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).not.toContain(secret)
@@ -179,7 +192,7 @@ describe('RpcRouter', () => {
             {},
             undefined,
             undefined,
-            () => ['transport.relay', 'harness.api.v1'],
+            () => ['transport.relay', 'harness.remote.v1'],
             undefined,
             () => [],
           )
@@ -188,7 +201,7 @@ describe('RpcRouter', () => {
             type: 'rpc.response',
             payload: {
               result: {
-                capabilities: ['transport.relay', 'harness.api.v1', 'remote.history.compact.v1'],
+                capabilities: ['transport.relay', 'harness.remote.v1', 'remote.history.compact.v1'],
                 workspaceTypes: [],
               },
             },
@@ -303,17 +316,8 @@ function createRouter(
   workspaceTypes?: () => readonly RemoteWorkspaceTypeDescription[],
   pluginRoute?: PluginRouteBridge,
 ): RpcRouter {
-  return new RpcRouter({
-    call: vi.fn(),
-    respond: vi.fn(),
-    openStream: vi.fn(),
-    closeStream: vi.fn(),
-    openTransfer: vi.fn(),
-    appendTransfer: vi.fn(),
-    commitTransfer: vi.fn(),
-    readTransfer: vi.fn(),
-    closeTransfer: vi.fn(),
-    closeAll: vi.fn(async () => undefined),
-    ...overrides,
-  } as unknown as HarnessApiBridge, undefined, logger, fileViewer, undefined, capabilities, codex, undefined, undefined, workspaceTypes, pluginRoute)
+  const bridge = Object.keys(overrides).length === 0 ? undefined : {
+    closeAll: vi.fn(async () => undefined), ...overrides,
+  } as unknown as HarnessRemoteBridge
+  return new RpcRouter(undefined, logger, fileViewer, bridge, capabilities, codex, undefined, undefined, workspaceTypes, pluginRoute)
 }

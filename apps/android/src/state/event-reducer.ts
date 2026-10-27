@@ -214,16 +214,15 @@ function addUserMessage(current: ChatItem[], data: UnknownRecord, sessionId: str
   if (!isHumanUserMessage(data)) return current
   const id = messageId(data)
   const text = messageText(data)
-  const persistedImages = messageImages(data)
+  const persistedImages = messageImages(data, sessionId)
   if (text.length === 0 && persistedImages.length === 0) return current
   const rpcId = messageRequestRpcId(data)
   const optimisticIndex = rpcId === undefined
     ? -1
     : current.findIndex(item => item.kind === 'message' && item.requestRpcId === rpcId)
   const optimistic = optimisticIndex < 0 ? undefined : current[optimisticIndex]
-  const images = optimistic?.kind === 'message' && optimistic.images !== undefined
-    ? optimistic.images
-    : persistedImages
+  const images = persistedImages.length > 0 ? persistedImages
+    : optimistic?.kind === 'message' ? optimistic.images ?? [] : []
   const message: ChatMessage = {
     kind: 'message', id, sessionId, role: 'user', text, createdAt: now(data),
     ...(rpcId === undefined ? {} : { requestRpcId: rpcId }),
@@ -247,6 +246,7 @@ function addAssistantMessage(current: ChatItem[], data: UnknownRecord, sessionId
   const id = messageId(data)
   const text = messageText(data)
   const reasoning = messageReasoning(data)
+  const images = messageImages(data, sessionId)
   const key = stepKey(event)
   const streamingIndex = current.findIndex(item =>
     item.kind === 'message' && item.streaming === true && item.id === `stream:${key}`)
@@ -258,7 +258,7 @@ function addAssistantMessage(current: ChatItem[], data: UnknownRecord, sessionId
     ? reasoning
     : streamed?.kind === 'message' ? streamed.reasoning : undefined
   const group = replyGroup(data) ?? (streamed?.kind === 'message' ? streamed.replyGroup : undefined)
-  if (!hasVisibleMessageText(finalText) && !hasVisibleMessageText(finalReasoning ?? '')) {
+  if (images.length === 0 && !hasVisibleMessageText(finalText) && !hasVisibleMessageText(finalReasoning ?? '')) {
     // Native assistant messages may contain only tool/content metadata. They
     // are not chat text and must not leave an empty avatar/"Remote" row.
     if (streamingIndex < 0) return current
@@ -266,6 +266,7 @@ function addAssistantMessage(current: ChatItem[], data: UnknownRecord, sessionId
   }
   const message: ChatMessage = {
     kind: 'message', id, sessionId, role: 'assistant', text: finalText, createdAt: now(data),
+    ...(images.length === 0 ? {} : { images }),
     ...(group === undefined ? {} : { replyGroup: group }),
     ...(finalReasoning === undefined ? {} : { reasoning: finalReasoning }),
   }
@@ -336,6 +337,7 @@ function applyToolCall(
   const detail = state === 'running'
     ? toolCallDetail(view, argumentsText)
     : toolResultDetail(view, data)
+  const images = state === 'finished' ? messageImages(data, sessionId) : []
   const failed = state === 'finished' && toolResultFailed(data)
   const uiMeta = state === 'finished' && !failed && ['ui_render', 'ui_patch', 'ui_render_widget'].includes(stringValue(data.name) ?? stringValue(data.toolName) ?? (current.find(item => item.id === id && item.kind === 'tool') as ToolActivity | undefined)?.toolKey ?? '')
     ? data.meta : undefined
@@ -352,6 +354,7 @@ function applyToolCall(
     ...(uiMeta === undefined ? {} : { uiResultMeta: uiMeta }),
     ...(state === 'running' && detail !== undefined ? { callDetail: detail } : {}),
     ...(state === 'finished' && detail !== undefined ? { resultDetail: detail } : {}),
+    ...(images.length === 0 ? {} : { images }),
     state: failed ? 'failed' : state,
     createdAt: now(data),
   }
@@ -368,6 +371,7 @@ function applyToolCall(
         ...(state === 'finished' ? {remoteDetail: next.remoteDetail} : {}),
         // A new terminal result must not inherit an earlier success marker.
         ...(state === 'finished' ? { uiResultMeta: next.uiResultMeta } : {}),
+        ...(state === 'finished' ? { images: next.images } : {}),
         state: next.state,
       }
     : item)
@@ -643,19 +647,27 @@ function messageReasoning(data: UnknownRecord): string {
     : []).join('\n')
 }
 
-function messageImages(data: UnknownRecord): NonNullable<ChatMessage['images']> {
+function messageImages(data: UnknownRecord, sessionId: string): NonNullable<ChatMessage['images']> {
   const message = isRecord(data.message) ? data.message : data
   const content = Array.isArray(message.content) ? message.content : []
-  return content.flatMap(block => {
+  const blocks = content.flatMap(block => isRecord(block) && block.type === 'tool-result' && Array.isArray(block.content) ? block.content : [block])
+  return blocks.flatMap(block => {
     if (!isRecord(block) || block.type !== 'image') return []
     const attachment = isRecord(block.attachment) ? block.attachment : {}
     const attachmentId = stringValue(block.attachmentId) ?? stringValue(attachment.attachmentId)
     const uri = imageDataUri(block)
     if (uri === undefined && attachmentId === undefined) return []
     const name = stringValue(block.name) ?? stringValue(attachment.name)
+    const mediaType = stringValue(block.mediaType) ?? stringValue(attachment.mediaType)
+    const width = typeof block.width === 'number' ? block.width : typeof attachment.width === 'number' ? attachment.width : undefined
+    const height = typeof block.height === 'number' ? block.height : typeof attachment.height === 'number' ? attachment.height : undefined
     return [{
+      ...(attachmentId === undefined ? {} : { attachmentId, sessionId }),
       ...(uri === undefined ? {} : { uri }),
       ...(name === undefined ? {} : { name }),
+      ...(mediaType === undefined ? {} : { mediaType }),
+      ...(width === undefined ? {} : { width }),
+      ...(height === undefined ? {} : { height }),
     }]
   })
 }

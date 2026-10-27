@@ -1,4 +1,3 @@
-import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { DisplaySession } from '@dsh-remote/client-core'
 import { CodexRemoteClient, projectCodexThread } from '@dsh-remote/client-core'
 import type { CodexPermissionPreset } from '@dsh-remote/protocol'
@@ -74,21 +73,18 @@ import {
 
 /**
  * A plugin-owned virtual Harness target. It projects CodeX Thread/Turn data at
- * the existing ApiProxy/Typert carrier boundary, so every UI layer above the
+ * the existing Typert carrier boundary, so every UI layer above the
  * official Workspace and Session controllers remains native DSH.
  */
 export class CodexVirtualHarness implements RemoteTypertGatewayTarget {
   private readonly live: CodexLiveProjection
   private readonly events: CodexEventCarrier
 
-  readonly api: ApiProxy
 
   private catalog?: CatalogState
   private readonly workspaceStreams = new Set<AsyncValueQueue>()
   private readonly controlStreams = new Set<AsyncValueQueue>()
   private readonly eventStreams = new Map<string, AsyncValueQueue>()
-  private readonly rcMuxStreams = new Set<AsyncValueQueue>()
-  private readonly rcHostStreams = new Set<AsyncValueQueue>()
   private readonly follows = new Set<FollowState>()
   private readonly pendingRequestIds = new Map<string, string>()
   private readonly pendingApprovals = new Map<string, PendingApproval>()
@@ -130,12 +126,10 @@ export class CodexVirtualHarness implements RemoteTypertGatewayTarget {
       publishProjection: (...args) => owner.events.publishProjection(...args),
       setPermissionSelection: (...args) => owner.setPermissionSelection(...args),
       emitRemoteEvent: (...args) => owner.events.emitRemoteEvent(...args),
-      broadcastRcHost: (...args) => owner.events.broadcastRcHost(...args),
       get selectedModels() { return owner.selectedModels },
       refreshAndPublishWorkspaces: (...args) => owner.refreshAndPublishWorkspaces(...args),
       get pendingApprovals() { return owner.pendingApprovals },
       emitApproval: (...args) => owner.events.emitApproval(...args),
-      broadcastRcMux: (...args) => owner.events.broadcastRcMux(...args),
       get imageAttachments() { return owner.imageAttachments },
     })
     this.events = new CodexEventCarrier({
@@ -148,12 +142,8 @@ export class CodexVirtualHarness implements RemoteTypertGatewayTarget {
       currentCatalog: (...args) => owner.currentCatalog(...args),
       get pendingApprovals() { return owner.pendingApprovals },
       get client() { return owner.client },
-      dispatch: (...args) => owner.dispatch(...args),
-      get rcMuxStreams() { return owner.rcMuxStreams },
-      get rcHostStreams() { return owner.rcHostStreams },
     })
 
-    this.api = this.events.createApiProxy()
   }
 
   static remote(
@@ -333,13 +323,9 @@ export class CodexVirtualHarness implements RemoteTypertGatewayTarget {
     for (const stream of this.workspaceStreams) stream.close()
     for (const stream of this.controlStreams) stream.close()
     for (const stream of this.eventStreams.values()) stream.close()
-    for (const stream of this.rcMuxStreams) stream.close()
-    for (const stream of this.rcHostStreams) stream.close()
     this.workspaceStreams.clear()
     this.controlStreams.clear()
     this.eventStreams.clear()
-    this.rcMuxStreams.clear()
-    this.rcHostStreams.clear()
     const follows = [...this.follows]
     this.follows.clear()
     for (const follow of follows) {
@@ -684,7 +670,6 @@ export class CodexVirtualHarness implements RemoteTypertGatewayTarget {
     const threadId = nativeThreadId(sessionId)
     const selection = this.modelSelection(sessionId, await this.models(signal))
     const isFreshBlankThread = this.blankThreads.has(threadId) || this.pendingThreads.has(threadId)
-    await this.live.ensureRcFollow(sessionId)
     if (!isFreshBlankThread) {
       const resumeResult = await this.client.request('thread/resume', {
         threadId,
@@ -850,11 +835,7 @@ export class CodexVirtualHarness implements RemoteTypertGatewayTarget {
       maxMessages: optionalPositiveInteger(request.maxMessages),
     }, signal)
     const directory = await this.models(signal).catch(() => undefined)
-    // rc.2 has one global mux rather than the alpha session/follow stream. A
-    // history read is the reliable signal that the native client has opened a
-    // Session, so attach the CodeX live stream here before returning its tail.
     if (beforeSeq === undefined) {
-      await this.live.ensureRcFollow(sessionId, history)
       signal.throwIfAborted()
       if (this.closed) throw new Error('The CodeX virtual Harness is closed.')
       this.rememberOpenedSession(sessionId)

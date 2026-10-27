@@ -94,7 +94,7 @@ jobs:
           mkdir -p release-assets/browser-extension
           cd apps/browser
           zip -qr "$GITHUB_WORKSPACE/release-assets/dsh-remote-browser-${GITHUB_REF_NAME}.zip" \
-            manifest.json popup.html styles.css media dist
+            manifest.json popup.html styles.css media _locales dist
 
       - name: Update release checksums
         run: |

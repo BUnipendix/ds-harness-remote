@@ -1,5 +1,5 @@
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http'
-import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
+import type { ControlResult } from './control-result.js'
 
 /** Namespaced loopback RPC prefix shared by the Host runtime and browser UI. */
 export const CONTROL_RPC_PREFIX = '/ds-harness-remote'
@@ -36,7 +36,7 @@ export type ControlRouteHandler = (
   endpoint: string,
   payload: unknown,
   signal: AbortSignal,
-) => Promise<RpcResult<unknown>>
+) => Promise<ControlResult<unknown>>
 
 /** Long-lived loopback response owner for the status event stream. */
 export interface ControlStatusStreamLike {

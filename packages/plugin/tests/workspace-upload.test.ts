@@ -29,6 +29,26 @@ async function put(host: WorkspaceUploadHost, p = request(), bytes = Buffer.from
   return host.call('workspace.upload.commit', scope(p))
 }
 
+it('allows 1 GiB only on live direct paths and discards a large upload after relay fallback', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-upload-path-'))
+  directories.push(root)
+  for (const initial of ['LAN', 'P2P', 'TURN', 'Relay', undefined]) {
+    let mode = initial
+    const host = new WorkspaceUploadHost(async () => root, undefined, () => mode)
+    hosts.push(host)
+    const params = request('large.bin', 1024 * 1024 * 1024)
+    if (initial === 'LAN' || initial === 'P2P') {
+      await host.call('workspace.upload.open', params)
+      mode = 'Relay'
+      await expect(host.call('workspace.upload.chunk', { sessionId: params.sessionId, uploadId: params.uploadId, offset: 0, data: 'YQ==' })).rejects.toMatchObject({ code: 'UPLOAD_LIMIT' })
+    } else {
+      await expect(host.call('workspace.upload.open', params)).rejects.toMatchObject({ code: 'UPLOAD_LIMIT' })
+    }
+    expect(await readdir(root)).toEqual([])
+    await expect(host.call('workspace.upload.open', request('too-large', 1024 * 1024 * 1024 + 1))).rejects.toThrow()
+  }
+})
+
 describe('workspace-root upload authority and lifecycle', () => {
   it('publishes exact binary bytes without overwriting files or following target symlinks, and commits idempotently', async () => {
     const { root, host } = await setup()
@@ -165,7 +185,7 @@ describe('workspace-root upload authority and lifecycle', () => {
   it('never logs upload metadata supplied through invalid extra fields', async () => {
     const { host } = await setup()
     const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() }
-    const router = new RpcRouter(undefined, undefined, logger as unknown as SafeLogger,
+    const router = new RpcRouter(undefined, logger as unknown as SafeLogger,
       undefined, undefined, () => ['workspace.upload.v1'], undefined, undefined, undefined, undefined, undefined, host)
     for (const method of ['workspace.upload.open', 'workspace.upload.chunk', 'workspace.upload.commit', 'workspace.upload.abort'] as const) {
       const response = await router.handle(createRpcRequest(method, { ...request(), endpoint: '/private/uploaded-secret.txt' }))
@@ -176,7 +196,7 @@ describe('workspace-root upload authority and lifecycle', () => {
 
   it('routes upload RPCs through the encrypted business router and cleans them on peer close', async () => {
     const { root, host } = await setup()
-    const router = new RpcRouter(undefined, undefined, undefined, undefined, undefined, () => ['workspace.upload.v1'],
+    const router = new RpcRouter(undefined, undefined, undefined, undefined, () => ['workspace.upload.v1'],
       undefined, undefined, undefined, undefined, undefined, host)
     const p = request()
     expect(await router.handle(createRpcRequest('workspace.upload.open', p))).toMatchObject({ type: 'rpc.response', payload: { result: { uploadId: p.uploadId } } })

@@ -49,7 +49,11 @@ class HostLoopbackTransport implements SecureHandshakeTransport {
     return () => { this.closeHandlers.delete(handler) }
   }
 
-  async close(): Promise<void> { this.closed = true }
+  async close(): Promise<void> {
+    if (this.closed) return
+    this.closed = true
+    this.disconnect()
+  }
 
   getStats() { return { mode: 'Relay' as const, connected: !this.closed } }
 
@@ -58,9 +62,22 @@ class HostLoopbackTransport implements SecureHandshakeTransport {
   }
 
   disconnect(): void { for (const handler of this.closeHandlers) handler() }
+  corruptFrame(): void { this.messageHandler?.(new Uint8Array(32)) }
 }
 
 describe('ClientSecureTransport', () => {
+  it('reports rejected ciphertext as a terminal security failure for reconnect policy', async () => {
+    const { secure, wire } = secureTransportFixture()
+    const closed = vi.fn()
+    const received = vi.fn()
+    secure.onClose(closed)
+    secure.onMessage(received)
+    await secure.connect()
+    wire.corruptFrame()
+    expect(closed).toHaveBeenCalledWith(expect.objectContaining({ code: 'SECURE_CHANNEL_FAILED' }))
+    expect(received).not.toHaveBeenCalled()
+    expect(wire.closed).toBe(true)
+  })
   it('starts the Noise deadline after transport selection and settles timeout, cancellation and disconnect', async () => {
     await runScenarios(['success', 'timeout', 'close', 'disconnect'].map(action => ({ name: action, run: async () => {
       vi.useFakeTimers()

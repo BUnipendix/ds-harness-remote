@@ -357,9 +357,7 @@ function remoteStatusLines(target: TuiRemoteTarget | undefined): readonly string
       : status.error === 'SERVER_CREDENTIALS_BUSY'
         ? ['Credential refresh is locked. Stop all instances before removing an orphaned server-credentials.json.refresh-lock and authorizing again.']
         : status.accountRequired ? ['Authorize again with /remote login [provider|list].'] : []),
-    `Harness Remote API: ${capabilities.has('harness.api.v1')
-      ? 'available (ApiProxy)'
-      : capabilities.has('harness.remote.v3')
+    `Harness Remote API: ${capabilities.has('harness.remote.v3')
         ? 'available (Typert Remote Session V3)'
         : capabilities.has('harness.remote.v1')
           ? 'available (Typert Remote)'

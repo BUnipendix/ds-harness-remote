@@ -1,5 +1,5 @@
 import type { RemoteGatewayStream } from '@dsh-remote/client-core'
-import { createNativeRpcId } from './api-proxy'
+import { createNativeRpcId } from './rpc-id'
 import type { SessionTools, TerminalFrame, TerminalInfo } from './session-tools'
 
 /** One physical attachment. Never reused on reconnect; uncertain input is never replayed. */

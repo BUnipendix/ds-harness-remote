@@ -71,7 +71,7 @@ Desktop 默认 `desktop` profile，独立 CLI 默认 `web`，可用 `DSH_COMMAND
 Desktop 也可打开 **扩展 / 插件管理**，从 npm 安装：
 
 ```text
-ds-harness-remote@0.5.18
+ds-harness-remote@0.5.19
 ```
 
 普通独立 CLI 不能管理保留的 `desktop` profile，必须使用 Desktop 官方 launcher。
@@ -84,6 +84,8 @@ ds-harness-remote@0.5.18
 | `DSH_PROFILE` | 所选 profile；独立默认 `web`，Desktop 默认 `desktop` |
 | `DSH_HOME` | 保留已有值，注册凭据与运行实例使用同一 home；Linux 通常为 root 的 home 下 `.dsh` |
 | `REMOTE_VERSION` | Remote 版本，默认 npm `latest` |
+| `INTELLIGENT_UI` | 为 `1` 时同时把 Intelligent UI 安装到同一 profile；默认 `0` |
+| `INTELLIGENT_UI_VERSION` | `INTELLIGENT_UI=1` 时的 Intelligent UI 版本，默认 npm `latest` |
 | `DSH_VERSION` | Linux 缺少 DSH 时的新安装版本，默认 npm `latest`，不升级已有 DSH |
 | `DSH_REMOTE_REGISTRATION_TOKEN` | 一次性 Host 注册 Token；推荐通过隐藏输入传入 |
 | `DSH_REMOTE_AUTOSTART=0` | Linux 跳过系统服务配置/启动，仍要求 root |

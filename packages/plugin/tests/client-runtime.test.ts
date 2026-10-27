@@ -2,7 +2,8 @@ import { runScenarios, scenarioName } from '../../../scripts/test-scenarios.mjs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ApiProxy, RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
+import type { ControlResult } from '../src/control-result.js'
+import { unwrapControlResult } from '../src/client/control-result.js'
 import { generateKeyPair, NoiseIkSession, createNoisePrologue, fromBase64Url, toBase64Url } from '@dsh-remote/crypto'
 import { createControlFrame } from '@dsh-remote/protocol'
 import { RemoteClientCore } from '@dsh-remote/client-core'
@@ -31,6 +32,29 @@ const cleanupScenario1 = async () => {
 afterEach(cleanupScenario1)
 
 describe('ClientModeRuntime Host account control', () => {
+  it('reuses the prepared device connection for tools without replacing or closing it', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-client-shared-'))
+    directories.push(directory)
+    const runtime = new ClientModeRuntime(config(), new IdentityStore({ directory }),
+      { bindIdentity: vi.fn() } as unknown as ClientServerApi, gatewayWithCarrier(), logger())
+    await runtime.start()
+    const state = runtime as any
+    const close = vi.fn(async () => undefined)
+    const remote = { target: { deviceId: 'host-1' }, client: { close } }
+    state.connected = remote
+    const connect = vi.spyOn(state.connection, 'connect')
+    try {
+      expect(await state.withToolRemote('host-1', new AbortController().signal,
+        async (value: unknown) => { expect(value).toBe(remote); return 'accepted' })).toBe('accepted')
+      await expect(state.withToolRemote('host-1', new AbortController().signal,
+        async () => { throw new Error('request failed') })).rejects.toThrow('request failed')
+      expect(connect).not.toHaveBeenCalled()
+      expect(close).not.toHaveBeenCalled()
+      await expect(state.withToolRemote('host-1', new AbortController().signal,
+        async () => { state.connected = undefined; return 'late'; })).rejects.toMatchObject({ code: 'CANCELLED' })
+    } finally { state.connected = undefined; await runtime.close() }
+  })
+
   it('retires pending connections on explicit exit, account sign-out and runtime shutdown', async () => {
     await runScenarios((['exit', 'sign-out', 'shutdown'] as const).flatMap(action =>
       (['mode', 'directory'] as const).map(request => ({ name: `${action}: pending ${request}`, run: async () => {
@@ -38,7 +62,7 @@ describe('ClientModeRuntime Host account control', () => {
         directories.push(directory)
         const runtime = new ClientModeRuntime(config(), new IdentityStore({ directory }),
           { bindIdentity: vi.fn(), revokeCurrentDevice: vi.fn(async () => undefined) } as unknown as ClientServerApi,
-          apiProxy(), gatewayWithCarrier(), logger())
+          gatewayWithCarrier(), logger())
         await runtime.start()
         let resolve!: (remote: unknown) => void
         const state = runtime as unknown as { connection: { connect: (id: string) => Promise<unknown> } }
@@ -64,7 +88,7 @@ describe('ClientModeRuntime Host account control', () => {
       const revoke = vi.fn(async () => { if (failure === 'revocation') throw new Error('revocation failed') })
       const runtime = new ClientModeRuntime(config(), new IdentityStore({ directory }),
         { bindIdentity: vi.fn(), revokeCurrentDevice: revoke } as unknown as ClientServerApi,
-        apiProxy(), gatewayWithCarrier(), logger())
+        gatewayWithCarrier(), logger())
       await runtime.start()
       const previousIdentity = runtime.status().deviceId
       const close = vi.fn(async () => { if (failure === 'carrier') throw new Error('carrier failed') })
@@ -147,7 +171,7 @@ describe('ClientModeRuntime Host account control', () => {
       authenticate: async () => ({ accessToken: 'test-token' }), turnCredentials: async () => [],
     } as unknown as ClientServerApi
     vi.spyOn(RemoteClientCore.prototype, 'rpc').mockResolvedValue({ capabilities: ['harness.remote.v3'] })
-    const runtime = new ClientModeRuntime(config(), identities, server, apiProxy(), gateway(), logger(), undefined,
+    const runtime = new ClientModeRuntime(config(), identities, server, gateway(), logger(), undefined,
       async () => ({ create }) as unknown as RtcPeerConnectionFactory)
     let connected: { client: RemoteClientCore } | undefined
     try {
@@ -162,6 +186,27 @@ describe('ClientModeRuntime Host account control', () => {
       expect(create).toHaveBeenCalledTimes(2)
       expect(sockets.slice(0, 2).every(socket => socket.readyState === 3)).toBe(true)
       expect(connected.client.getStats().mode).toBe('Relay')
+      // Agent discovery uses the same real handshake/fallback path without
+      // replacing the UI's connection or its progress state.
+      const state = runtime as unknown as {
+        connection: import('../src/client-connection.js').ClientConnection
+        connected: unknown
+        connectionProgress: unknown
+        connectionProgressRun: number
+      }
+      state.connected = connected
+      const progress = state.connectionProgress
+      const run = state.connectionProgressRun
+      const background = state.connection.connect('host-1', undefined, { background: true })
+      await vi.advanceTimersByTimeAsync(41000)
+      const candidate = await background
+      expect(state.connectionProgress).toBe(progress)
+      expect(state.connectionProgressRun).toBe(run)
+      expect(state.connected).toBe(connected)
+      await candidate.client.close()
+      expect(state.connected).toBe(connected)
+      expect(connected.client.getStats().mode).toBe('Relay')
+      state.connected = undefined
     } finally {
       await connected?.client.close()
       await runtime.close()
@@ -179,7 +224,7 @@ describe('ClientModeRuntime Host account control', () => {
               commandList: false,
               fileViewer: false,
               terminal: false,
-              apiProxy: true,
+
               remoteGateway: false,
               codex: false,
               pluginRoute: false,
@@ -187,70 +232,15 @@ describe('ClientModeRuntime Host account control', () => {
               antigravity: false,
               opencode: false,
             })
-            expect(remoteHostFeatures('not-semver')).toEqual({
-              commandList: false,
-              fileViewer: false,
-              terminal: false,
-              apiProxy: true,
-              remoteGateway: false,
-              codex: false,
-              pluginRoute: false,
-              cursor: false,
-              antigravity: false,
-              opencode: false,
-            })
-            expect(remoteHostFeatures('0.3.15')).toEqual({
-              commandList: false,
-              fileViewer: false,
-              terminal: false,
-              apiProxy: true,
-              remoteGateway: false,
-              codex: false,
-              pluginRoute: false,
-              cursor: false,
-              antigravity: false,
-              opencode: false,
-            })
-            expect(remoteHostFeatures('0.3.16')).toEqual({
-              commandList: true,
-              fileViewer: false,
-              terminal: false,
-              apiProxy: true,
-              remoteGateway: false,
-              codex: false,
-              pluginRoute: false,
-              cursor: false,
-              antigravity: false,
-              opencode: false,
-            })
-            expect(remoteHostFeatures('v0.3.17')).toEqual({
-              commandList: true,
-              fileViewer: true,
-              terminal: false,
-              apiProxy: true,
-              remoteGateway: false,
-              codex: false,
-              pluginRoute: false,
-              cursor: false,
-              antigravity: false,
-              opencode: false,
-            })
-            expect(remoteHostFeatures('0.3.99-beta.1')).toEqual({
-              commandList: true,
-              fileViewer: true,
-              terminal: false,
-              apiProxy: true,
-              remoteGateway: false,
-              codex: false,
-              pluginRoute: false,
-              cursor: false,
-              antigravity: false,
-              opencode: false,
-            })
+
+
+
+
+
           },
         },
         {
-          name: 'prefers encrypted Host capability discovery while retaining the legacy fallback',
+          name: 'requires authenticated capability discovery',
           run: async () => {
             const alphaClient = {
               rpc: vi.fn(async () => ({
@@ -266,7 +256,7 @@ describe('ClientModeRuntime Host account control', () => {
               commandList: true,
               fileViewer: false,
               terminal: false,
-              apiProxy: false,
+
               remoteGateway: true,
               codex: true,
               pluginRoute: false,
@@ -283,7 +273,7 @@ describe('ClientModeRuntime Host account control', () => {
               commandList: true,
               fileViewer: false,
               terminal: false,
-              apiProxy: false,
+
               remoteGateway: true,
               sessionFormat: 3,
               codex: false,
@@ -301,7 +291,7 @@ describe('ClientModeRuntime Host account control', () => {
               commandList: false,
               fileViewer: false,
               terminal: false,
-              apiProxy: false,
+
               remoteGateway: false,
               codex: true,
               pluginRoute: false,
@@ -316,18 +306,7 @@ describe('ClientModeRuntime Host account control', () => {
                 throw Object.assign(new Error('unknown method'), { code: 'METHOD_NOT_FOUND' })
               }),
             }
-            await expect(probeRemoteHostFeatures(legacyClient as never, '0.3.17')).resolves.toEqual({
-              commandList: true,
-              fileViewer: true,
-              terminal: false,
-              apiProxy: true,
-              remoteGateway: false,
-              codex: false,
-              pluginRoute: false,
-              cursor: false,
-              antigravity: false,
-              opencode: false,
-            })
+            await expect(probeRemoteHostFeatures(legacyClient as never, '0.3.17')).rejects.toMatchObject({ code: 'FEATURE_NOT_SUPPORTED' })
           },
         },
         {
@@ -390,13 +369,13 @@ describe('ClientModeRuntime Host account control', () => {
             const capability = `agent.acp.${backend}.v1`
             const client = {
               rpc: vi.fn(async () => ({
-                capabilities: ['harness.api.v1', capability],
+                capabilities: ['harness.remote.v1', capability],
                 workspaceTypes: [{ id: backend, name: backend, capability, available: false }],
               })),
             }
             expect(await probeRemoteHostFeatures(client as never)).toMatchObject({ [backend]: false })
             client.rpc.mockResolvedValueOnce({
-              capabilities: ['harness.api.v1', capability],
+              capabilities: ['harness.remote.v1', capability],
               workspaceTypes: [{ id: backend, name: backend, capability, available: true }],
             })
             expect(await probeRemoteHostFeatures(client as never)).toMatchObject({ [backend]: true })
@@ -421,7 +400,6 @@ describe('ClientModeRuntime Host account control', () => {
       config(),
       new IdentityStore({ directory }),
       { bindIdentity: vi.fn(), startOAuthQrLogin } as unknown as ClientServerApi,
-      apiProxy(),
       gateway(),
       logger(),
     )
@@ -460,29 +438,13 @@ describe('ClientModeRuntime Host account control', () => {
       config(),
       new IdentityStore({ directory }),
       { bindIdentity: vi.fn() } as unknown as ClientServerApi,
-      apiProxy(),
-      gateway(),
+      gatewayWithCarrier(),
       logger(),
     )
     await runtime.start()
-    const rpc = vi.fn(async (_endpoint: string, payload: unknown) => {
-      const request = payload as { rpcId: string }
-      return {
-        rpcId: request.rpcId,
-        result: {
-          ok: true,
-          value: {
-            workspace: {
-              workspaceId: 'workspace-remote-1',
-              path: '/srv/project',
-              title: 'project',
-              sessionIds: [],
-            },
-            created: false,
-          },
-        },
-      }
-    })
+    const rpc = vi.fn(async () => ({
+      ok: true, value: { workspace: { workspaceId: 'workspace-remote-1', path: '/srv/project', title: 'project', sessionIds: [] }, created: false },
+    }))
     const close = vi.fn(async () => undefined)
     ;(runtime as unknown as { connected: unknown }).connected = {
       client: { rpc, close, getStats: () => ({ mode: 'Relay', connected: true }) },
@@ -495,7 +457,7 @@ describe('ClientModeRuntime Host account control', () => {
         trustedAt: 1,
       },
       transport: {},
-      features: { commandList: true, fileViewer: true, apiProxy: true, remoteGateway: false, codex: false },
+      features: { commandList: true, fileViewer: true, remoteGateway: true, codex: false },
     }
 
     await expect(runtime.openRemoteWorkspace('host-device-1', '/srv/project')).resolves.toMatchObject({
@@ -539,7 +501,7 @@ describe('ClientModeRuntime Host account control', () => {
         const directory = await mkdtemp(join(tmpdir(), 'dsh-client-codex-recovery-'))
         directories.push(directory)
         const runtime = new ClientModeRuntime(config(), new IdentityStore({ directory }),
-          { bindIdentity: vi.fn(), revokeCurrentDevice: vi.fn(async () => undefined) } as unknown as ClientServerApi, apiProxy(), gatewayWithCarrier(), logger())
+          { bindIdentity: vi.fn(), revokeCurrentDevice: vi.fn(async () => undefined) } as unknown as ClientServerApi, gatewayWithCarrier(), logger())
         const threads = [
           { id: 'latest', cwd: '/srv/repo', name: 'Latest', updatedAt: 30, turns: [] },
           { id: 'older', cwd: '/srv/repo', name: 'Older', updatedAt: 10, turns: [] },
@@ -620,11 +582,12 @@ describe('ClientModeRuntime Host account control', () => {
           const workspaces = await runtime.listCodexWorkspaces('host-1')
           const repo = workspaces.find(workspace => workspace.path === '/srv/repo')!
           await runtime.openCodexWorkspace('host-1', repo.workspaceId)
-          const history = await state.codexVirtual.api.sessions.history({ rpcId: 'open-older' as never, payload: { sessionId: 'codex:older' as never } })
-          expect(history.result.ok).toBe(true)
+          const history = await state.codexVirtual.dispatch('session/history', { args: { request: { sessionId: 'codex:older' as never } } }, new AbortController().signal)
+          expect(history.ok).toBe(true)
+          await state.codexVirtual.open('session/follow', { args: { request: { address: { kind: 'session', sessionId: 'codex:older' } } } }, new AbortController().signal)
           if (scenario.nativeNavigation) {
-            const otherHistory = await state.codexVirtual.api.sessions.history({ rpcId: 'open-other' as never, payload: { sessionId: 'codex:other-older' as never } })
-            expect(otherHistory.result.ok).toBe(true)
+            const otherHistory = await state.codexVirtual.dispatch('session/history', { args: { request: { sessionId: 'codex:other-older' as never } } }, new AbortController().signal)
+            expect(otherHistory.ok).toBe(true)
           }
           if (scenario.successor !== undefined) {
             const workspace = { workspaceId: `${scenario.successor}:cwd:/srv/repo`, path: '/srv/repo', title: 'Repo', sessionIds: ['acp-successor'] }
@@ -733,7 +696,6 @@ describe('ClientModeRuntime Host account control', () => {
       config(),
       new IdentityStore({ directory }),
       { bindIdentity: vi.fn() } as unknown as ClientServerApi,
-      apiProxy(),
       gateway(),
       logger(),
     )
@@ -768,7 +730,7 @@ describe('ClientModeRuntime Host account control', () => {
         deviceId: 'host-device-1', name: 'Workstation', platform: 'linux', publicKey: 'peer-key', fingerprint: 'PEER', trustedAt: 1,
       },
       transport: {},
-      features: { commandList: true, fileViewer: false, apiProxy: true, remoteGateway: false, codex: false },
+      features: { commandList: true, fileViewer: false, remoteGateway: false, codex: false },
     }
     const signal = new AbortController().signal
 
@@ -802,8 +764,7 @@ describe('ClientModeRuntime Host account control', () => {
       config(),
       new IdentityStore({ directory }),
       { bindIdentity: vi.fn() } as unknown as ClientServerApi,
-      apiProxy(),
-      gateway(),
+      gatewayWithCarrier(),
       logger(),
     )
     await runtime.start()
@@ -839,7 +800,7 @@ describe('ClientModeRuntime Host account control', () => {
         deviceId: 'host-device-1', name: 'Workstation', platform: 'linux', publicKey: 'peer-key', fingerprint: 'PEER', trustedAt: 1,
       },
       transport: {},
-      features: { commandList: false, fileViewer: false, apiProxy: false, remoteGateway: false, codex: true },
+      features: { commandList: false, fileViewer: false, remoteGateway: false, codex: true },
     }
 
     await expect(runtime.createCodexWorkspace('host-device-1', '/srv/project')).resolves.toMatchObject({
@@ -874,7 +835,6 @@ describe('ClientModeRuntime Host account control', () => {
       config(),
       new IdentityStore({ directory }),
       { bindIdentity: vi.fn() } as unknown as ClientServerApi,
-      undefined,
       gatewayWithCarrier(),
       logger(),
     )
@@ -929,7 +889,7 @@ describe('ClientModeRuntime Host account control', () => {
         deviceId: 'host-device-1', name: 'Workstation', platform: 'linux', publicKey: 'peer-key', fingerprint: 'PEER', trustedAt: 1,
       },
       transport: {},
-      features: { commandList: true, fileViewer: false, apiProxy: false, remoteGateway: true, codex: false },
+      features: { commandList: true, fileViewer: false, remoteGateway: true, codex: false },
     }
 
     await expect(runtime.listRemoteDirectory('host-device-1', '/srv')).resolves.toMatchObject({ path: '/srv' })
@@ -968,7 +928,6 @@ describe('ClientModeRuntime Host account control', () => {
               config(),
               new IdentityStore({ directory: alphaDirectory }),
               { bindIdentity: vi.fn() } as unknown as ClientServerApi,
-              undefined,
               alphaGateway,
               logger(),
             )
@@ -976,7 +935,6 @@ describe('ClientModeRuntime Host account control', () => {
               config(),
               new IdentityStore({ directory: legacyDirectory }),
               { bindIdentity: vi.fn() } as unknown as ClientServerApi,
-              apiProxy(),
               gateway(),
               logger(),
             )
@@ -1007,7 +965,7 @@ describe('ClientModeRuntime Host account control', () => {
               features: {
                 commandList: true,
                 fileViewer: false,
-                apiProxy: true,
+
                 remoteGateway: false,
                 codex: false,
                 pluginRoute: false,
@@ -1020,7 +978,7 @@ describe('ClientModeRuntime Host account control', () => {
               features: {
                 commandList: true,
                 fileViewer: false,
-                apiProxy: false,
+
                 remoteGateway: true,
                 codex: false,
                 pluginRoute: false,
@@ -1050,7 +1008,6 @@ describe('ClientModeRuntime Host account control', () => {
               config(),
               new IdentityStore({ directory }),
               { bindIdentity: vi.fn() } as unknown as ClientServerApi,
-              undefined,
               gatewayWithCarrier(),
               logger(),
               {
@@ -1084,7 +1041,7 @@ describe('ClientModeRuntime Host account control', () => {
               features: {
                 commandList: true,
                 fileViewer: false,
-                apiProxy: false,
+
                 remoteGateway: true,
                 sessionFormat: 3,
                 codex: false,
@@ -1100,7 +1057,7 @@ describe('ClientModeRuntime Host account control', () => {
           },
         },
         {
-          name: 'selects the legacy ApiProxy transport for rc.2 Hosts even when the local Typert carrier exists',
+          name: 'rejects rc.2 Hosts even when the local Typert carrier exists',
           run: async () => {
             const directory = await mkdtemp(join(tmpdir(), 'dsh-client-dual-carrier-'))
             directories.push(directory)
@@ -1108,7 +1065,6 @@ describe('ClientModeRuntime Host account control', () => {
               config(),
               new IdentityStore({ directory }),
               { bindIdentity: vi.fn() } as unknown as ClientServerApi,
-              apiProxy(),
               gatewayWithCarrier(),
               logger(),
             )
@@ -1146,28 +1102,15 @@ describe('ClientModeRuntime Host account control', () => {
               features: {
                 commandList: true,
                 fileViewer: false,
-                apiProxy: true,
+
                 remoteGateway: false,
                 codex: false,
                 pluginRoute: false,
               },
             }
 
-            await expect(runtime.openRemoteWorkspace('host-device-rc2', '/srv/project')).resolves.toMatchObject(
-              {
-                mode: 'remote',
-                workspace: { created: true, workspace: { workspaceId: 'workspace-rc2-1' } },
-              },
-            )
-            expect(rpc).toHaveBeenCalledWith(
-              'harness.api.call',
-              expect.objectContaining({
-                method: 'workspace.create',
-                payload: { path: '/srv/project' },
-              }),
-              undefined,
-            )
-            expect(rpc).not.toHaveBeenCalledWith('harness.remote.call', expect.anything(), expect.anything())
+            await expect(runtime.openRemoteWorkspace('host-device-rc2', '/srv/project')).rejects.toMatchObject({ code: 'HARNESS_VERSION_INCOMPATIBLE' })
+            expect(rpc).not.toHaveBeenCalled()
             await runtime.close()
           },
         },
@@ -1180,7 +1123,6 @@ describe('ClientModeRuntime Host account control', () => {
               config(),
               new IdentityStore({ directory }),
               { bindIdentity: vi.fn() } as unknown as ClientServerApi,
-              undefined,
               gatewayWithCarrier(),
               logger(),
               {
@@ -1222,7 +1164,7 @@ describe('ClientModeRuntime Host account control', () => {
               features: {
                 commandList: true,
                 fileViewer: false,
-                apiProxy: false,
+
                 remoteGateway: true,
                 codex: false,
                 pluginRoute: false,
@@ -1269,21 +1211,23 @@ describe('ClientModeRuntime Host account control', () => {
       authorizeHostWithAccount: vi.fn(async (email: string) => ({ account: email, expiresAt: Date.now() + 60_000, isAdmin: false })),
       authorizeHostWithCode: vi.fn(async () => ({ method: 'host_registration_code' })),
     } satisfies HostAuthorizationControl
+    const hasStoredAuthorization = vi.fn(async () => false)
+    const authenticate = vi.fn(async () => ({ accessToken: 'client-access-token', account: 'owner@example.com' }))
     const runtime = new ClientModeRuntime(
       config(),
       new IdentityStore({ directory }),
       {
         bindIdentity: vi.fn(),
-        authenticate: vi.fn(async () => ({ accessToken: 'client-access-token', account: 'owner@example.com' })),
+        hasStoredAuthorization,
+        authenticate,
       } as unknown as ClientServerApi,
-      apiProxy(),
       gateway(),
       logger(),
       host,
     )
     await runtime.start()
 
-    let handler: ((endpoint: string, payload: unknown, signal: AbortSignal) => Promise<RpcResult<unknown>>) | undefined
+    let handler: ((endpoint: string, payload: unknown, signal: AbortSignal) => Promise<ControlResult<unknown>>) | undefined
     const connection = {
       rpc: {
         handle: vi.fn((_channel, next) => {
@@ -1297,6 +1241,18 @@ describe('ClientModeRuntime Host account control', () => {
       authority: 'loopback',
     })
     const signal = new AbortController().signal
+
+    authenticate.mockClear()
+    await expect(handler?.('client.authorization.status', {}, signal)).resolves.toMatchObject({
+      ok: true, value: { hasCredentials: false },
+    })
+    hasStoredAuthorization.mockResolvedValueOnce(true)
+    await expect(handler?.('client.authorization.status', {}, signal)).resolves.toMatchObject({
+      ok: true, value: { hasCredentials: true },
+    })
+    hasStoredAuthorization.mockRejectedValueOnce(new Error('credential store unavailable'))
+    await expect(handler?.('client.authorization.status', {}, signal)).resolves.toMatchObject({ ok: false })
+    expect(authenticate).not.toHaveBeenCalled()
 
     await expect(handler?.('status', {}, signal)).resolves.toMatchObject({
       ok: true,
@@ -1316,7 +1272,7 @@ describe('ClientModeRuntime Host account control', () => {
   })
 
   it('requires local Host authorization before listing devices', async () => {
-    const rows = ['DEVICE_REVOKED', 'AUTH_INVALID', 'TOKEN_EXPIRED'] as const
+    const rows = ['ACCOUNT_AUTH_REQUIRED', 'DEVICE_OWNERSHIP_REQUIRED', 'DEVICE_REVOKED', 'AUTH_INVALID', 'TOKEN_EXPIRED'] as const
     await runScenarios(
       rows.map((row, index) => {
         const error = row
@@ -1340,7 +1296,6 @@ describe('ClientModeRuntime Host account control', () => {
               config(),
               new IdentityStore({ directory }),
               { bindIdentity: vi.fn(), listDevices } as unknown as ClientServerApi,
-              apiProxy(),
               gateway(),
               logger(),
               host,
@@ -1348,6 +1303,10 @@ describe('ClientModeRuntime Host account control', () => {
             await runtime.start()
 
             await expect(runtime.devices()).rejects.toMatchObject({ code: error })
+            // The browser must receive the domain code, not the envelope's
+            // generic "internal" code, to return to account authorization.
+            const result = await runtime.handleControl('devices', {}, new AbortController().signal)
+            expect(() => unwrapControlResult(result, 'Request failed')).toThrow(expect.objectContaining({ code: error }))
             expect(listDevices).not.toHaveBeenCalled()
             await runtime.close()
           },
@@ -1385,7 +1344,7 @@ describe('ClientModeRuntime Host account control', () => {
       })),
       presenceFor: vi.fn(async () => ({ online: true })),
     } as unknown as ClientServerApi
-    const runtime = new ClientModeRuntime(config(), identities, server, apiProxy(), gateway(), logger())
+    const runtime = new ClientModeRuntime(config(), identities, server, gateway(), logger())
     await runtime.start()
 
     await expect(runtime.devices()).resolves.toMatchObject([{ deviceId: 'host-device-1', online: true }])
@@ -1407,7 +1366,6 @@ describe('ClientModeRuntime Host account control', () => {
       config(),
       new IdentityStore({ directory }),
       { bindIdentity: vi.fn() } as unknown as ClientServerApi,
-      apiProxy(),
       gateway(),
       logger(),
     )
@@ -1445,25 +1403,6 @@ function config(): ResolvedConfig {
     codex: { enabled: false, binary: 'codex' },
     cursor: { enabled: false, binary: 'agent' },
   }
-}
-
-function apiProxy(): ApiProxy {
-  const empty = {}
-  return {
-    sessions: { list: vi.fn() },
-    subagents: empty,
-    host: empty,
-    workspace: empty,
-    skills: empty,
-    agentPresets: empty,
-    goals: empty,
-    settings: empty,
-    credentials: empty,
-    llm: empty,
-    events: empty,
-    downloads: empty,
-    respond: async () => ({ accepted: true }),
-  } as unknown as ApiProxy
 }
 
 function logger(): SafeLogger {

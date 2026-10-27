@@ -2,7 +2,6 @@ import { runScenarios, scenarioName } from '../../../scripts/test-scenarios.mjs'
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
-import { RpcId, type ApiProxy } from '@deepseek-ai/dsh-host-apiproxy/api'
 import { createRpcRequest, type LoopbackRead, type LoopbackWsRead, type RemoteMessage, type RpcErrorPayload, type RpcResponsePayload } from '@dsh-remote/protocol'
 import { describe, expect, it, vi } from 'vitest'
 import { WebSocketServer } from 'ws'
@@ -10,12 +9,28 @@ import type { ResolvedConfig } from '../src/config.js'
 import type { HostIdentity, IdentityStore } from '../src/identity-store.js'
 import type { SafeLogger } from '../src/logging.js'
 import { HostPluginRuntime } from '../src/service.js'
+import { HostServerConnection } from '../src/server-connection.js'
 import { CodexRemoteDomain } from '../src/codex/domain.js'
 import { CodexAppServerError, type CodexAppServerLike } from '../src/codex/app-server.js'
 import type { AuthenticatedPeerChannel } from '../src/types.js'
 import type { LocalTypertGateway } from '../src/typert-gateway-contract.js'
 
 describe('HostPluginRuntime multi-Client routing', () => {
+  it('does not start inbound Host authorization when control is disabled at startup', async () => {
+    const start = vi.spyOn(HostServerConnection.prototype, 'start').mockImplementation(() => undefined)
+    try {
+      await runScenarios([false, true].map(enabled => ({ name: 'hostControl=' + enabled, run: async () => {
+        start.mockClear()
+        const runtime = new HostPluginRuntime({ ...config(), serverUrl: 'https://server.example', hostControl: { enabled } }, Object.assign(identities(), { directory: '/fixture/host-identity' }), logger())
+        try {
+          await runtime.start()
+          expect(start).toHaveBeenCalledTimes(enabled ? 1 : 0)
+          if (!enabled) expect(runtime.hostStatus()).toMatchObject({ online: false, authorized: false, accountRequired: false })
+        } finally { await runtime.close() }
+      } })))
+    } finally { start.mockRestore() }
+  })
+
   it('advertises CodeX readiness over the authenticated channel', async () => {
     const rows = [
       'ready',
@@ -37,7 +52,7 @@ describe('HostPluginRuntime multi-Client routing', () => {
           ),
           run: async () => {
             const settings = { ...config(), codex: { enabled: scenario !== 'disabled', binary: '/test/codex' } }
-            const runtime = new HostPluginRuntime(settings, identities(), apiProxy({}), logger())
+            const runtime = new HostPluginRuntime(settings, identities(), logger())
             let ready = false
             const app: CodexAppServerLike = {
               start: vi.fn(async () => {
@@ -104,13 +119,11 @@ describe('HostPluginRuntime multi-Client routing', () => {
                 scenario === 'ready'
                   ? [
                       'workspace.upload.v1',
-                      'harness.api.v1',
-                      'harness.api.transfer.v1',
-                      'codex.appserver.v1',
+                                  'codex.appserver.v1',
                       'codex.appserver.transfer.v1',
                       'remote.history.compact.v1',
                     ]
-                  : ['workspace.upload.v1', 'harness.api.v1', 'harness.api.transfer.v1', 'remote.history.compact.v1'],
+                  : ['workspace.upload.v1', 'remote.history.compact.v1'],
               )
               expect(result.workspaceTypes).toEqual(
                 scenario === 'ready'
@@ -142,7 +155,7 @@ describe('HostPluginRuntime multi-Client routing', () => {
       { id: 'antigravity', enabled: true, command: 'agy', args: [] },
       { id: 'cursor', enabled: false, command: 'agent', args: ['acp'] },
     ] } }
-    const runtime = new HostPluginRuntime(settings, { ...identities(), directory: '/tmp/dsh-remote-startup-test' } as IdentityStore, apiProxy({}), logger(), localGateway())
+    const runtime = new HostPluginRuntime(settings, { ...identities(), directory: '/tmp/dsh-remote-startup-test' } as IdentityStore, logger(), localGateway())
     let release!: () => void
     const pending = new Promise<void>(resolve => { release = resolve })
     const start = vi.fn()
@@ -184,7 +197,6 @@ describe('HostPluginRuntime multi-Client routing', () => {
             const runtime = new HostPluginRuntime(
               config(),
               identities(),
-              apiProxy({}),
               logger(),
               localGateway(),
             )
@@ -195,8 +207,6 @@ describe('HostPluginRuntime multi-Client routing', () => {
               capabilities: expect.arrayContaining([
                 'harness.remote.v3',
                 'harness.remote.transfer.v1',
-                'harness.api.v1',
-                'harness.api.transfer.v1',
               ]),
             })
             await runtime.close()
@@ -208,22 +218,17 @@ describe('HostPluginRuntime multi-Client routing', () => {
 
   it('allows identical stream ids on different Client connections without crossing frames', async () => {
     const streamSignals: AbortSignal[] = []
-    const mux: ApiProxy['events']['mux'] = async function* (request, signal) {
+    const gateway = localGateway()
+    gateway.open = async (_endpoint, payload, signal) => (async function* () {
       streamSignals.push(signal)
-      yield {
-        rpcId: RpcId(`frame-for-${String(request.rpcId)}`),
-        payload: { type: 'session/subscribed', sessionId: 'session-1' as never, lastSeq: 0 },
-      }
+      yield { marker: (payload as { args: { sessionId: string } }).args.sessionId }
       await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }))
-    }
-    const api = apiProxy({
-      mux,
-    })
+    })()
     const runtime = new HostPluginRuntime(
       config(),
       identities(),
-      api,
       logger(),
+      gateway,
     )
     await runtime.start()
 
@@ -239,8 +244,8 @@ describe('HostPluginRuntime multi-Client routing', () => {
       expect(streamSignals).toHaveLength(2)
       expect(phone.sent()).toContainEqual(expect.objectContaining({ type: 'rpc.response' }))
       expect(desktop.sent()).toContainEqual(expect.objectContaining({ type: 'rpc.response' }))
-      expect(streamFrameRpcIds(phone.sent())).toEqual(['frame-for-phone-open'])
-      expect(streamFrameRpcIds(desktop.sent())).toEqual(['frame-for-desktop-open'])
+      expect(streamFrameRpcIds(phone.sent())).toEqual(['phone-open'])
+      expect(streamFrameRpcIds(desktop.sent())).toEqual(['desktop-open'])
     })
     expect(runtime.diagnostics()).toMatchObject({
       online: true,
@@ -268,7 +273,7 @@ describe('HostPluginRuntime multi-Client routing', () => {
     const port = (server.address() as { port: number }).port
     const settings = config()
     settings.loopback.ports = [port]
-    const runtime = new HostPluginRuntime(settings, identities(), apiProxy({}), logger())
+    const runtime = new HostPluginRuntime(settings, identities(), logger())
     try {
       await runtime.start()
       const phone = fakeChannel('connection-phone', 'client-phone')
@@ -308,7 +313,7 @@ describe('HostPluginRuntime multi-Client routing', () => {
     const port = (server.address() as { port: number }).port
     const settings = config()
     settings.loopback.ports = [port]
-    const runtime = new HostPluginRuntime(settings, identities(), apiProxy({}), logger())
+    const runtime = new HostPluginRuntime(settings, identities(), logger())
     try {
       await runtime.start()
       const phone = fakeChannel('connection-phone', 'client-phone')
@@ -341,7 +346,7 @@ describe('HostPluginRuntime multi-Client routing', () => {
   it('applies changed preview ports to current and reconnected Clients', async () => {
     const settings = config()
     settings.loopback.ports = [5173]
-    const runtime = new HostPluginRuntime(settings, identities(), apiProxy({}), logger())
+    const runtime = new HostPluginRuntime(settings, identities(), logger())
     try {
       await runtime.start()
       const phone = fakeChannel('connection-phone', 'client-phone')
@@ -369,7 +374,7 @@ describe('HostPluginRuntime multi-Client routing', () => {
   it('revokes preview ports for every connected Client while retaining allowed sockets', async () => {
     const servers = [createServer(), createServer()]
     const upstreams = servers.map(server => new WebSocketServer({ server }))
-    const runtime = new HostPluginRuntime(config(), identities(), apiProxy({}), logger())
+    const runtime = new HostPluginRuntime(config(), identities(), logger())
     try {
       const ports = await Promise.all(servers.map(async server => {
         await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -434,21 +439,20 @@ async function peerRpc<T = unknown>(channel: ReturnType<typeof fakeChannel>, par
 }
 
 function streamRequest(rpcId: string): RemoteMessage {
-  return createRpcRequest('harness.api.stream.open', {
+  return createRpcRequest('harness.remote.stream.open', {
     streamId: 'same-client-stream-id',
-    stream: 'mux',
-    rpcId,
-    payload: {},
+    endpoint: 'session/follow',
+    payload: { args: { sessionId: rpcId } },
   })
 }
 
 function streamFrameRpcIds(messages: RemoteMessage[]): unknown[] {
   return messages
     .filter(message => message.type === 'event'
-      && (message.payload as { event?: string }).event === 'harness.api.frame')
+      && (message.payload as { event?: string }).event === 'harness.remote.frame')
     .map(message => (
-      message.payload as { data: { frame: { rpcId: unknown } } }
-    ).data.frame.rpcId)
+      message.payload as { data: { value: { marker: unknown } } }
+    ).data.value.marker)
 }
 
 function identities(): IdentityStore {
@@ -470,28 +474,6 @@ function identities(): IdentityStore {
     listTrustedPeers: vi.fn(() => [...peers.values()]),
     trustedPeer: vi.fn((deviceId: string) => peers.get(deviceId)),
   } as unknown as IdentityStore
-}
-
-function apiProxy(events: Partial<ApiProxy['events']>): ApiProxy {
-  const empty = {}
-  return {
-    sessions: empty,
-    subagents: empty,
-    host: empty,
-    workspace: empty,
-    skills: empty,
-    agentPresets: empty,
-    goals: empty,
-    settings: empty,
-    credentials: empty,
-    llm: empty,
-    events: {
-      mux: events.mux ?? (async function* () { return }),
-      host: events.host ?? (async function* () { return }),
-    },
-    downloads: empty,
-    respond: async () => ({ accepted: true }),
-  } as unknown as ApiProxy
 }
 
 function localGateway(): LocalTypertGateway {

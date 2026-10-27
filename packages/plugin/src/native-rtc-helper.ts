@@ -143,10 +143,13 @@ function nvmNodeCandidates(): string[] {
   }
 }
 
-function isUsableExternalNode(candidate: string, requireFrom: string): boolean {
+export function isUsableExternalNode(candidate: string, requireFrom: string): boolean {
   if (!isExecutableFile(candidate)) return false
   const env: NodeJS.ProcessEnv = { ...process.env, DSH_REMOTE_RTC_HELPER_REQUIRE_FROM: requireFrom }
-  delete env.ELECTRON_RUN_AS_NODE
+  // A candidate can be the Desktop's Electron executable or a launcher for it.
+  // Probe in Node mode so it cannot open a second Desktop and leave its Host
+  // writing into the probe's closed stdout pipe. Electron is still rejected below.
+  env.ELECTRON_RUN_AS_NODE = '1'
   const probe = spawnSync(candidate, [
     '--input-type=module',
     '--eval',

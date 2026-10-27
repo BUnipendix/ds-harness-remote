@@ -72,7 +72,6 @@ async function runtime(requireVerifiedPeer: boolean, key: string) {
     config(requireVerifiedPeer),
     new IdentityStore({ directory }),
     serverWith(key),
-    undefined,
     { invoke: vi.fn(async () => undefined) } as never,
     logger(),
   )
@@ -241,7 +240,6 @@ describe('pairing codes agree between the two devices', () => {
       config(false),
       new IdentityStore({ directory }),
       { bindIdentity: vi.fn(), hasStoredAuthorization: async () => false } as unknown as ClientServerApi,
-      undefined,
       { invoke: vi.fn(async () => undefined) } as never,
       logger(),
     )

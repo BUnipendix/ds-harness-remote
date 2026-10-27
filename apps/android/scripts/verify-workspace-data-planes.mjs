@@ -24,7 +24,7 @@ if (packageMetadata?.version !== appVersion) {
   )
 }
 
-for (const marker of ['harness.api.v1', 'harness.remote.v1', 'harness.remote.call']) {
+for (const marker of ['harness.remote.v1', 'harness.remote.call']) {
   if (!remoteGateway.includes(marker)) {
     throw new Error(`Compiled client-core is stale or incomplete: missing ${marker}.`)
   }
@@ -42,7 +42,7 @@ for (const marker of ['AgentAcpClient', 'agent.acp.call', 'agent.acp.stream.open
   if (!acpClient.includes(marker)) throw new Error(`Compiled client-core is stale or incomplete: missing ${marker}.`)
 }
 
-console.log(`Android workspace data planes verified: rc.2 ApiProxy + v0.1.2 Typert Remote + CodeX Remote + Agent ACP (${appVersion})`)
+console.log(`Android workspace data planes verified: Typert Remote + CodeX Remote + Agent ACP (${appVersion})`)
 
 async function readJson(path) {
   return JSON.parse(await readFile(path, 'utf8'))

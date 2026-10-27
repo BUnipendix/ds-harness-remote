@@ -342,9 +342,23 @@ describe('remote mux frame reducer', () => {
               id: 'u-image',
               role: 'user',
               text: '',
-              images: [{ name: 'diagram.png' }],
+              images: [{ attachmentId: 'attachment-1', sessionId: 's1', name: 'diagram.png' }],
             }),
           ])
+        },
+      },
+      {
+        name: 'retains image-only assistant and nested tool results from native history',
+        run: () => {
+          const image = { type: 'image', attachment: { attachmentId: 'ai-image', name: 'result.png' } }
+          const assistant = sessionEvent({ type: 'assistant/message', data: { message: { id: 'ai', content: [image] } } })
+          const call = sessionEvent({ type: 'tool/call', data: { callId: 'c1', name: 'read_image' } })
+          const result = sessionEvent({ type: 'tool/result', data: { callId: 'c1', message: {
+            content: [{ type: 'tool-result', content: [image] }],
+          } } })
+          const rows = foldHistory([{ event: assistant }, { event: call }, { event: result }], 's1')
+          expect(rows).toHaveLength(2)
+          for (const row of rows) expect(row).toMatchObject({ images: [{ attachmentId: 'ai-image', sessionId: 's1', name: 'result.png' }] })
         },
       },
       {

@@ -1,4 +1,5 @@
 import { compactHistory } from './compact-history.js'
+import { randomUUID } from 'node:crypto'
 import { TerminalCarrierCompat, usesDuplexTerminal } from './terminal-carrier-compat.js'
 import type {
   HarnessApiTransferChunkParams,
@@ -52,6 +53,7 @@ interface OutgoingTransfer {
   totalChunks: number
   nextIndex: number
   touchedAt: number
+  finish?: (error?: Error) => void
 }
 
 const endpointSchema = z.string().min(1).max(128).regex(/^(?:\$events(?:\/result)?|[A-Za-z0-9_$.-]+\/[A-Za-z0-9_$.-]+)$/)
@@ -60,6 +62,7 @@ const streamOpenSchema = z.object({
   streamId: z.string().min(1).max(128),
   endpoint: endpointSchema,
   payload: z.unknown(),
+  transferFrames: z.boolean().optional(),
 }).strict()
 const streamCloseSchema = z.object({ streamId: z.string().min(1).max(128) }).strict()
 const commandExecuteArgsSchema = z.object({
@@ -389,6 +392,7 @@ export class HarnessRemoteBridge {
     if (transfer === undefined) throw new RpcError('TRANSFER_NOT_FOUND', 'The Harness Remote response transfer is not active.')
     if (params.index !== transfer.nextIndex || params.index >= transfer.totalChunks) {
       this.outgoingTransfers.delete(params.transferId)
+      transfer.finish?.(new Error('Invalid Harness Remote stream transfer order'))
       throw new RpcError('INVALID_MESSAGE', 'Harness Remote response chunks must be read exactly once and in order.')
     }
     const start = params.index * HARNESS_API_TRANSFER_CHUNK_BYTES
@@ -404,6 +408,8 @@ export class HarnessRemoteBridge {
 
   closeTransfer(input: unknown): { closed: boolean; transferId: string } {
     const params = transferIdSchema.parse(input)
+    const transfer = this.outgoingTransfers.get(params.transferId)
+    transfer?.finish?.(transfer.nextIndex === transfer.totalChunks ? undefined : new Error('Incomplete Harness Remote stream transfer'))
     const closed = this.incomingTransfers.delete(params.transferId) || this.outgoingTransfers.delete(params.transferId)
     return { closed, transferId: params.transferId }
   }
@@ -433,7 +439,7 @@ export class HarnessRemoteBridge {
       controller.abort()
       throw error
     }
-    void this.pump(params.streamId, source, controller.signal, params.endpoint === 'session/follow')
+    void this.pump(params.streamId, source, controller.signal, params.endpoint === 'session/follow', params.transferFrames)
     return { opened: true, streamId: params.streamId }
   }
 
@@ -490,7 +496,7 @@ export class HarnessRemoteBridge {
     }
   }
 
-  private async pump(streamId: string, source: AsyncIterable<unknown>, signal: AbortSignal, historyFollow = false): Promise<void> {
+  private async pump(streamId: string, source: AsyncIterable<unknown>, signal: AbortSignal, historyFollow = false, transferFrames = false): Promise<void> {
     let reason: HarnessRemoteStreamClosedData['reason'] = 'completed'
     let failure: HarnessRemoteStreamClosedData['failure']
     try {
@@ -502,9 +508,11 @@ export class HarnessRemoteBridge {
           ...(value === undefined ? {} : { value: historyFollow && this.compactHistoryEnabled && isCompactSnapshot(value) ? compactHistory(value) : value }),
         }
         if (encodeMessage(createEvent('harness.remote.frame', frame)).byteLength > MAX_SECURE_MESSAGE_BYTES) {
-          throw new Error('Oversized Harness Remote frame')
+          if (!transferFrames) throw new Error('Oversized Harness Remote frame')
+          await this.transferStreamFrame(frame, signal)
+        } else {
+          await this.publish('harness.remote.frame', frame)
         }
-        await this.publish('harness.remote.frame', frame)
       }
       if (signal.aborted) reason = 'cancelled'
     } catch (error) {
@@ -520,10 +528,47 @@ export class HarnessRemoteBridge {
     }
   }
 
+  /** Keep the source paused until the Client reads and releases this exact item. */
+  private async transferStreamFrame(frame: HarnessRemoteFrameData, signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted()
+    this.pruneTransfers()
+    const bytes = new TextEncoder().encode(JSON.stringify(frame))
+    if (bytes.byteLength > MAX_HARNESS_API_TRANSFER_BYTES) throw new Error('Harness Remote stream item exceeds the bounded transfer limit')
+    if (this.outgoingTransfers.size >= MAX_ACTIVE_TRANSFERS) throw new Error('Too many Harness Remote response transfers are active')
+    const transferId = randomUUID()
+    const totalChunks = Math.ceil(bytes.byteLength / HARNESS_API_TRANSFER_CHUNK_BYTES)
+    let finish!: (error?: Error) => void
+    const completed = new Promise<void>((resolve, reject) => { finish = error => error === undefined ? resolve() : reject(error) })
+    // Attach a rejection handler before publishing; cancellation may race the write.
+    void completed.catch(() => undefined)
+    const transfer: OutgoingTransfer = { bytes, totalChunks, nextIndex: 0, touchedAt: Date.now(), finish }
+    this.outgoingTransfers.set(transferId, transfer)
+    const onAbort = () => finish(new Error('Harness Remote stream transfer cancelled'))
+    signal.addEventListener('abort', onAbort, { once: true })
+    const timer = setInterval(() => {
+      if (Date.now() - transfer.touchedAt >= TRANSFER_IDLE_MS) finish(new Error('Harness Remote stream transfer timed out'))
+    }, 1000)
+    timer.unref()
+    try {
+      await this.publish('harness.remote.frame', {
+        streamId: frame.streamId, hasValue: true,
+        transfer: { kind: 'chunked', transferId, totalBytes: bytes.byteLength, totalChunks },
+      })
+      await completed
+    } finally {
+      clearInterval(timer)
+      signal.removeEventListener('abort', onAbort)
+      this.outgoingTransfers.delete(transferId)
+    }
+  }
+
   private pruneTransfers(): void {
     const cutoff = Date.now() - TRANSFER_IDLE_MS
     for (const [id, transfer] of this.incomingTransfers) if (transfer.touchedAt < cutoff) this.incomingTransfers.delete(id)
-    for (const [id, transfer] of this.outgoingTransfers) if (transfer.touchedAt < cutoff) this.outgoingTransfers.delete(id)
+    for (const [id, transfer] of this.outgoingTransfers) if (transfer.touchedAt < cutoff) {
+      this.outgoingTransfers.delete(id)
+      transfer.finish?.(new Error('Harness Remote stream transfer timed out'))
+    }
   }
 }
 

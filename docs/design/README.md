@@ -1,6 +1,6 @@
 # DSH Remote 设计文档
 
-更新时间：2026-10-09；对应 Plugin 0.5.2 发布内容的当前源码。
+核对日期：2026-10-27；对应仓库 `0.5.21` 源码，不代表已发布或完成新增运行时验收。
 
 本目录描述当前产品和实现边界。运行方式见[根 README](../../README.md)，线协议以
 [protocol.md](../protocol.md)为准，实现约束见 [AGENTS](../../AGENTS.md)，未完成工作见
@@ -35,11 +35,11 @@
 
 | 领域 | Host 接入 | Client 展示 | 边界 |
 | --- | --- | --- | --- |
-| Harness | 官方 Typert Remote Gateway（legacy ApiProxy 仅保留历史实现） | Desktop 原生 UI、Android / VS Code Client | 原生会话契约，固定 endpoint allowlist |
+| Harness | 官方 Typert Remote Gateway（rc.2 ApiProxy 已移除） | Desktop 原生 UI、Android / VS Code Client | 原生会话契约，固定 endpoint allowlist |
 | CodeX | stdio App Server，`codex.app.*` | Desktop 内存载体、Android 内存投影 | 不写 DSH 存储；Project / Thread authority |
-| Cursor / AGY | ACP gateway，`agent.acp.*` | 浏览器可用的 Desktop 内存载体、Android 投影 | 独立后端 capability、工作区 ID 与会话归属 |
+| Cursor / AGY / Pi / OpenCode / Claude | ACP gateway，`agent.acp.*` | 浏览器可用的 Desktop 内存载体、Android 投影 | 独立后端 capability、工作区 ID 与会话归属 |
 
-当前兼容范围见[兼容说明](../compatibility.zh.md)：开发基线 `0.2.1-alpha.1`，保留 `0.2.0-rc.2` / rc.1，并接纳后续 `0.2.2` RC 版本。legacy ApiProxy 不再作为兼容维护目标。Client 按加密 capability 与 `workspaceTypes.available` 判断协议支持及实际就绪；未来版本范围接纳不代表 runtime 已验收。
+当前兼容范围见[兼容说明](../compatibility.zh.md)：开发基线 `0.2.1-rc.1`，保留 `0.2.0-rc.2` / rc.1，并接纳后续 `0.2.2` RC 版本。Host / Android legacy ApiProxy 实现已移除。Client 按加密 capability 与 `workspaceTypes.available` 判断协议支持及实际就绪；未来版本范围接纳不代表 runtime 已验收。
 
 ## 主路径
 
@@ -51,11 +51,11 @@
 
 ## 访问与配置
 
-- 文件只读；Harness 使用官方 `workspaceFiles` / `officeToPdf` 或 dsh-file-viewer provider，CodeX / ACP 使用 Host 验证过的会话根和受限工具载体。
+- 文件树和预览只读；Harness 使用官方 `workspaceFiles` / `officeToPdf` 或 dsh-file-viewer provider，CodeX / ACP 使用 Host 验证过的会话根和受限工具载体。
 - 原生终端默认开启，可在 Host 本地关闭；按设备固定归属、按连接校验输入权，断线不重放输入。
 - `loopback.ports` 默认空；仅允许 Host 出站访问 `127.0.0.1` 的明确白名单端口。Desktop 的预览代理只监听本机。
 - Remote 不得修改插件自身终端、loopback 或后端访问设置。后端开关热更新对应进程和 capability，ACP 初始化不阻塞 Harness Remote。
-- AGY 图片缓存是明确授权的私有 tmp 例外，不扩展为通用文件上传或项目写入。
+- AGY 图片缓存仅写专用私有 tmp；独立 `workspace.upload.v1` 允许向 Host 验证的当前会话工作区根上传文件，不接受 Client 自报路径。官方 `workspace/create` 可创建缺失的 Harness 工作区目录；CodeX Project 仍只注册已有目录。具体边界见[协议](../protocol.md)。
 
 ## 验证边界
 

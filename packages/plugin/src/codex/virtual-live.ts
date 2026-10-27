@@ -47,12 +47,10 @@ export interface CodexLiveProjectionContext {
   readonly publishProjection: (sessionId: string, key: string, value: unknown, seq: number) => void
   readonly setPermissionSelection: (sessionId: string, preset: CodexPermissionPreset | undefined) => void
   readonly emitRemoteEvent: (event: string, args: unknown[]) => void
-  readonly broadcastRcHost: (payload: unknown) => void
   readonly selectedModels: Map<string, CodexModelSelection>
   readonly refreshAndPublishWorkspaces: () => Promise<void>
   readonly pendingApprovals: Map<string, PendingApproval>
   readonly emitApproval: (input: { eventId: string; agentId: string; request: JsonRecord; }) => void
-  readonly broadcastRcMux: (payload: unknown, rpcId?: string) => void
   readonly imageAttachments: Map<string, CodexImageAttachmentEntry>
 }
 
@@ -250,13 +248,6 @@ export class CodexLiveProjection {
       const status = record(params.status)
       const running = status.type === 'active'
       this.context.emitRemoteEvent('api-session/status', [follow.sessionId, running])
-      if (status.type === 'systemError') {
-        this.context.broadcastRcHost({
-          type: 'host/agent-error',
-          sessionId: follow.sessionId,
-          message: 'CodeX reported a thread system error.',
-        })
-      }
       return
     }
     if (frame.method === 'model/rerouted') {
@@ -387,16 +378,8 @@ export class CodexLiveProjection {
         : {}),
     }
     this.cacheImageBlocks(follow.sessionId, event.data)
-    if (!follow.rcOnly) {
-      follow.queue.push({
-        type: 'event',
-        event,
-        ...(view === undefined ? {} : { view }),
-      })
-    }
-    this.context.broadcastRcMux({
-      type: 'session/event',
-      sessionId: follow.sessionId,
+    follow.queue.push({
+      type: 'event',
       event,
       ...(view === undefined ? {} : { view }),
     })
@@ -468,7 +451,7 @@ export class CodexLiveProjection {
   }
 
   pushAssistantChunk(follow: FollowState, chunk: JsonRecord): void {
-    if (this.context.sessionGeneration !== 'v3' || follow.rcOnly === true) {
+    if (this.context.sessionGeneration !== 'v3') {
       this.pushEvent(follow, 'assistant/chunk', { turn: follow.turn, step: 1, chunk })
       return
     }
@@ -519,7 +502,7 @@ export class CodexLiveProjection {
     if (attempt === undefined) return
     follow.assistantAttempt = undefined
     follow.assistantStreamRevision += 1
-    if (this.context.sessionGeneration === 'v3' && follow.rcOnly !== true) {
+    if (this.context.sessionGeneration === 'v3') {
       follow.queue.push({
         type: 'assistant-stream',
         frame: {
@@ -583,70 +566,6 @@ export class CodexLiveProjection {
     follow.liveToolOutput.clear()
     follow.liveToolResultSeq.clear()
     follow.pendingToolImages = []
-  }
-
-  async ensureRcFollow(sessionId: string, seedHistory?: CodexNativeHistoryPage): Promise<void> {
-    if (this.followsHas(sessionId)) return
-    const threadId = nativeThreadId(sessionId)
-    // The Host bounds CodeX streams per connection. rc.2 only renders one
-    // active conversation, so release older rc-only follows when navigation
-    // moves to another Session. Alpha follows own their lifecycle separately.
-    const stale = [...this.context.follows].filter(follow => follow.rcOnly && follow.sessionId !== sessionId)
-    for (const follow of stale) {
-      this.context.follows.delete(follow)
-      follow.queue.close()
-      await follow.close?.().catch(() => undefined)
-    }
-    const history = seedHistory ?? await this.context.readHistoryPage(threadId, {}, undefined)
-    const controller = new AbortController()
-    const follow: FollowState = {
-      sessionId,
-      threadId,
-      queue: new AsyncValueQueue(controller.signal),
-      nextSeq: history.cursor + 1,
-      turn: history.nextTurn,
-      stepOpen: history.activeTurnId !== undefined,
-      startedItems: new Set(),
-      completedItems: new Set(),
-      streamedBlocks: new Map(),
-      nextBlockIndex: 0,
-      streamActive: false,
-      assistantStreamRevision: 0,
-      liveItems: new Map(),
-      liveToolOutput: new Map(),
-      liveToolResultSeq: new Map(),
-      pendingToolImages: [],
-      requestId: this.context.pendingRequestIds.get(sessionId),
-      rcOnly: true,
-      ...(history.activeTurnId === undefined ? {} : { activeTurnId: history.activeTurnId }),
-    }
-    this.context.follows.add(follow)
-    try {
-      const stream = await this.context.client.subscribe(
-        threadId,
-        frame => this.acceptCodexFrame(follow, frame),
-        controller.signal,
-        () => this.closeFollowAfterRemoteStreamClosed(follow),
-      )
-      if (this.context.closed || !this.context.follows.has(follow)) {
-        await stream.close().catch(() => undefined)
-        throw new Error('The CodeX follow was closed before it opened.')
-      }
-      follow.close = async () => {
-        controller.abort()
-        await stream.close()
-      }
-    } catch (error) {
-      this.context.follows.delete(follow)
-      controller.abort()
-      follow.queue.close()
-      throw error
-    }
-  }
-
-  followsHas(sessionId: string): boolean {
-    for (const follow of this.context.follows) if (follow.sessionId === sessionId) return true
-    return false
   }
 
   closeFollowAfterRemoteStreamClosed(follow: FollowState): void {

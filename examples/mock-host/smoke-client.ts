@@ -39,7 +39,7 @@ const registration = await request<{ accessToken: string }>('/api/v1/devices/reg
       role: 'client',
       platform: identity.platform,
       identityKey: identity.publicKey,
-      clientVersion: '0.5.19',
+      clientVersion: '0.5.21',
     },
   }),
 }, login.token)
