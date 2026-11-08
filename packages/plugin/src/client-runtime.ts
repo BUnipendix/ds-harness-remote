@@ -18,6 +18,7 @@ import type {
   HostConnectionHandle,
   RemoteDeviceView,
   RemoteDirectoryListing,
+  RemoteHostFeatures,
   RemoteWorkspaceSelection,
   RemoteWorkspaceView,
 } from './client-runtime-contract.js'
@@ -58,7 +59,12 @@ export class ClientModeRuntime {
     const lifetime = this.remoteLifetime.signal
     const connectionSignal = signal === undefined ? lifetime : AbortSignal.any([lifetime, signal])
     connectionSignal.throwIfAborted()
-    const remote = await this.connection.connect(targetDeviceId, connectionSignal)
+    const remote = await this.connection.connect(targetDeviceId, connectionSignal).catch(error => {
+      if (!connectionSignal.aborted && !this.connected && this.gatewaySwitch.status().target?.deviceId === targetDeviceId) {
+        this.noteClientAuthFailure(error)
+      }
+      throw error
+    })
     if (connectionSignal.aborted || this.closed) {
       await remote.client.close().catch(() => undefined)
       throw new ClientModeError('CANCELLED', 'The Remote connection request was superseded or closed.')
@@ -87,7 +93,7 @@ export class ClientModeRuntime {
   private readonly codexOpenedSessions = new Map<string, string>()
   private codexOpenGeneration = 0
   private cursorVirtual?: AcpVirtualHarness
-  private acpVirtualBackend: 'cursor' | 'antigravity' | 'pi' | 'opencode' | 'claude' = 'cursor'
+  private acpVirtualBackend: 'cursor' | 'antigravity' | 'pi' | 'opencode' | 'claude' | 'hermes' = 'cursor'
   private readonly gatewaySwitch: TypertGatewaySwitch
   private readonly codexStreams = new Map<string, CodexLoopbackStream>()
   private connectionProgress?: ConnectionProgressState
@@ -96,8 +102,17 @@ export class ClientModeRuntime {
   private remoteLifetime = new AbortController()
   private selectionLifetime = new AbortController()
   private readonly reconnect: ClientReconnect
+  private readonly featureProbePromises = new WeakMap<object, Promise<RemoteHostFeatures>>()
   private recoverable?: ConnectedRemote
   private recoveryGeneration = 0
+  private clientAuthRequired = false
+
+  private noteClientAuthFailure(error: unknown): void {
+    if (error instanceof Error && 'code' in error && typeof error.code === 'string'
+      && (error.code === 'AUTH_REQUIRED' || HOST_AUTHORIZATION_ERRORS.has(error.code))) {
+      this.clientAuthRequired = true
+    }
+  }
   private readonly sessionTools = new RemoteSessionTools((hostId, signal, query) => this.withToolRemote(hostId, signal, query))
 
   runSessionTool(operation: SessionToolOperation, args: unknown, signal: AbortSignal): Promise<unknown> {
@@ -200,8 +215,19 @@ export class ClientModeRuntime {
     try {
       if (this.host === undefined) return
       if (this.config.hostControl?.enabled === false) return
-      if (this.host.hostStatus().authorized) return
-      if (this.host.hasStoredAuthorization !== undefined && await this.host.hasStoredAuthorization()) return
+      // `authorized` and `hasStoredAuthorization` both answer "a credential
+      // exists", never "the credential still works". The Server can revoke the
+      // token family while this process keeps the credential in memory, and
+      // nothing rewrites the file afterwards, so a dead Host still reports
+      // itself authorized. Once the control connection reports an
+      // authentication error that cache is disproven: re-authorize instead of
+      // trusting it, otherwise signing in again repairs nothing and the Host
+      // stays unusable until the process restarts.
+      const status = this.host.hostStatus()
+      if (!status.accountRequired) {
+        if (status.authorized) return
+        if (this.host.hasStoredAuthorization !== undefined && await this.host.hasStoredAuthorization()) return
+      }
       const credentials = await this.server.authenticate(this.requireIdentity())
       await this.host.authorizeHostAsOwned(credentials.accessToken, credentials.account)
     } catch (error) {
@@ -224,6 +250,7 @@ export class ClientModeRuntime {
       ...targetStatus,
       connected: this.connected !== undefined,
       recoveryGeneration: this.recoveryGeneration,
+      ...(this.clientAuthRequired && !this.connected && targetStatus.mode === 'remote' ? { clientAuthRequired: true } : {}),
       transport: this.connected?.client.getStats().mode ?? 'Disconnected',
       connectedTargetDeviceId: this.connected?.target.deviceId,
       preferredTransports: this.config.forceRelay ? ['relay'] : ['lan', 'p2p', 'turn', 'relay'],
@@ -282,22 +309,38 @@ export class ClientModeRuntime {
     if (this.closed) throw new ClientModeError('CANCELLED', 'The Remote runtime is closed.')
     this.assertHostAuthorizationForDeviceDiscovery()
     this.requireIdentity()
-    const serverDevices = await this.server.listDevices(signal)
-    signal?.throwIfAborted()
-    const remoteDevices = serverDevices.filter(device => device.deviceId !== this.host?.hostStatus().deviceId)
-    const results = await Promise.allSettled(remoteDevices.map(async device => {
-      signal?.throwIfAborted()
-      await this.connection.authorizeHostPeer(device, signal)
-      const presence = await this.server.presenceFor(device.deviceId, signal).catch(() => ({ online: false }))
-      signal?.throwIfAborted()
+    const devices: RemoteDeviceView[] = []
+    for await (const page of this.server.devicePages(signal)) {
+      const remoteDevices = page.filter(device => device.deviceId !== this.host?.hostStatus().deviceId)
+      const resolved: RemoteDeviceView[] = new Array(remoteDevices.length)
+      let next = 0
+      let failed = false
+      // Bound authorization/presence fan-out even when an older Server ignores
+      // pagination. Finish this page before fetching the next one.
+      const workers = await Promise.allSettled(Array.from({ length: Math.min(8, remoteDevices.length) }, async () => {
+        try {
+          while (!failed && next < remoteDevices.length) {
+            signal.throwIfAborted()
+            this.assertHostAuthorizationForDeviceDiscovery()
+            const index = next++
+            const device = remoteDevices[index]!
+            await this.connection.authorizeHostPeer(device, signal)
+            const presence = await this.server.presenceFor(device.deviceId, signal).catch(() => ({ online: false }))
+            signal.throwIfAborted()
+            this.assertHostAuthorizationForDeviceDiscovery()
+            resolved[index] = { ...device, ...presence }
+          }
+        } catch (error) { failed = true; throw error }
+      }))
+      signal.throwIfAborted()
       this.assertHostAuthorizationForDeviceDiscovery()
-      return { ...device, ...presence }
-    }))
+      const failure = workers.find(result => result.status === 'rejected')
+      if (failure?.status === 'rejected') throw failure.reason
+      devices.push(...resolved)
+    }
     signal.throwIfAborted()
     this.assertHostAuthorizationForDeviceDiscovery()
-    const failure = results.find(result => result.status === 'rejected')
-    if (failure?.status === 'rejected') throw failure.reason
-    return results.flatMap(result => result.status === 'fulfilled' ? [result.value] : [])
+    return devices
   }
 
   /**
@@ -328,6 +371,7 @@ export class ClientModeRuntime {
       authorization = await this.server.authorizeWithAccount(this.identity, email, password)
     }
     await this.authorizeHostByDefault()
+    this.clientAuthRequired = false
     this.logger.info('Client account authorized')
     return authorization
   }
@@ -344,7 +388,10 @@ export class ClientModeRuntime {
       return this.identity
     })
     if (result.status === 'complete') this.logger.info('Client account authorized with QR login')
-    if (result.status === 'complete') await this.authorizeHostByDefault()
+    if (result.status === 'complete') {
+      this.clientAuthRequired = false
+      await this.authorizeHostByDefault()
+    }
     return result
   }
 
@@ -449,7 +496,7 @@ export class ClientModeRuntime {
       if (remote.features.codex) {
         await read('codex', () => discoverCodexVirtualWorkspaces(new CodexRemoteClient(remote.client), activeSignal))
       }
-      for (const backend of ['cursor', 'antigravity', 'pi', 'opencode', 'claude'] as const) {
+      for (const backend of ['cursor', 'antigravity', 'pi', 'opencode', 'claude', 'hermes'] as const) {
         if (!remote.features[backend]) continue
         // Use the existing ACP catalog RPC directly: optional UI discovery swallows
         // backend errors, whereas a tool must distinguish unavailable from empty.
@@ -527,7 +574,7 @@ export class ClientModeRuntime {
 
   async listCodexWorkspaces(targetDeviceId: string, signal?: AbortSignal): Promise<CodexVirtualWorkspaceView[]> {
     const remote = await this.ensureConnected(targetDeviceId, signal)
-    remote.features = await probeRemoteHostFeatures(remote.client, remote.clientVersion)
+    await this.refreshRemoteFeatures(remote)
     if (!remote.features.codex) {
       throw new ClientModeError('FEATURE_NOT_SUPPORTED', 'The selected Host does not provide CodeX workspaces.')
     }
@@ -548,7 +595,7 @@ export class ClientModeRuntime {
       }
     }
     assertCurrent()
-    remote.features = await probeRemoteHostFeatures(remote.client, remote.clientVersion)
+    await this.refreshRemoteFeatures(remote)
     assertCurrent()
     if (!remote.features.codex) {
       throw new ClientModeError('FEATURE_NOT_SUPPORTED', 'The selected Host does not provide CodeX workspaces.')
@@ -599,7 +646,7 @@ export class ClientModeRuntime {
     const trimmedPath = path.trim()
     if (trimmedPath === '') throw new ClientModeError('INVALID_MESSAGE', 'A CodeX project directory is required.')
     const remote = await this.ensureConnected(targetDeviceId, signal)
-    remote.features = await probeRemoteHostFeatures(remote.client, remote.clientVersion)
+    await this.refreshRemoteFeatures(remote)
     if (!remote.features.codex) {
       throw new ClientModeError('FEATURE_NOT_SUPPORTED', 'The selected Host does not provide CodeX workspaces.')
     }
@@ -617,9 +664,9 @@ export class ClientModeRuntime {
     return this.openCodexWorkspace(targetDeviceId, codexProjectWorkspaceId(project.id), signal)
   }
 
-  async listCursorWorkspaces(targetDeviceId: string, signal?: AbortSignal, backend: 'cursor' | 'antigravity' | 'pi' | 'opencode' | 'claude' = 'cursor'): Promise<AcpVirtualWorkspaceView[]> {
+  async listCursorWorkspaces(targetDeviceId: string, signal?: AbortSignal, backend: 'cursor' | 'antigravity' | 'pi' | 'opencode' | 'claude' | 'hermes' = 'cursor'): Promise<AcpVirtualWorkspaceView[]> {
     const remote = await this.ensureConnected(targetDeviceId, signal)
-    remote.features = await probeRemoteHostFeatures(remote.client, remote.clientVersion)
+    await this.refreshRemoteFeatures(remote)
     if (!remote.features[backend]) {
       throw new ClientModeError('FEATURE_NOT_SUPPORTED', `The selected Host does not provide ${backend} workspaces.`)
     }
@@ -635,10 +682,10 @@ export class ClientModeRuntime {
     targetDeviceId: string,
     workspaceId: string,
     signal?: AbortSignal,
-    backend: 'cursor' | 'antigravity' | 'pi' | 'opencode' | 'claude' = 'cursor',
+    backend: 'cursor' | 'antigravity' | 'pi' | 'opencode' | 'claude' | 'hermes' = 'cursor',
   ): Promise<Record<string, unknown>> {
     const remote = await this.ensureConnected(targetDeviceId, signal)
-    remote.features = await probeRemoteHostFeatures(remote.client, remote.clientVersion)
+    await this.refreshRemoteFeatures(remote)
     if (!remote.features[backend]) {
       throw new ClientModeError('FEATURE_NOT_SUPPORTED', `The selected Host does not provide ${backend} workspaces.`)
     }
@@ -683,12 +730,12 @@ export class ClientModeRuntime {
     targetDeviceId: string,
     path: string,
     signal?: AbortSignal,
-    backend: 'cursor' | 'antigravity' | 'pi' | 'opencode' | 'claude' = 'cursor',
+    backend: 'cursor' | 'antigravity' | 'pi' | 'opencode' | 'claude' | 'hermes' = 'cursor',
   ): Promise<Record<string, unknown>> {
     const trimmedPath = path.trim()
     if (trimmedPath === '') throw new ClientModeError('INVALID_MESSAGE', `A ${backend} project directory is required.`)
     const remote = await this.ensureConnected(targetDeviceId, signal)
-    remote.features = await probeRemoteHostFeatures(remote.client, remote.clientVersion)
+    await this.refreshRemoteFeatures(remote)
     if (!remote.features[backend]) {
       throw new ClientModeError('FEATURE_NOT_SUPPORTED', `The selected Host does not provide ${backend} workspaces.`)
     }
@@ -742,6 +789,7 @@ export class ClientModeRuntime {
   }
 
   private async leaveRemote(): Promise<void> {
+    this.clientAuthRequired = false
     this.beginSelection()
     this.sessionTools.invalidate()
     this.remoteLifetime.abort(new ClientModeError('CANCELLED', 'The Remote connection was closed.'))
@@ -796,6 +844,7 @@ export class ClientModeRuntime {
 
   private selectRemoteTarget(remote: ConnectedRemote): void {
     this.assertRemoteCompatible(remote)
+    this.clientAuthRequired = false
     const target = { deviceId: remote.target.deviceId, name: remote.target.name }
     this.gatewaySwitch.selectRemote(this.remoteTypertGateway(remote), undefined, target)
     this.recoverable = remote
@@ -807,6 +856,7 @@ export class ClientModeRuntime {
       remote.client,
       localSessionGeneration === 'v3' && remote.features.sessionFormat !== 3 ? 'legacy-to-v3' : undefined,
       remote.harnessVersion,
+      true,
     )
   }
 
@@ -871,6 +921,21 @@ export class ClientModeRuntime {
       'HARNESS_VERSION_INCOMPATIBLE',
       'This Client does not provide a compatible Harness carrier for the selected remote workspace.',
     )
+  }
+
+  private async refreshRemoteFeatures(remote: ConnectedRemote): Promise<RemoteHostFeatures> {
+    const key = remote.client as unknown as object
+    let pending = this.featureProbePromises.get(key)
+    if (pending === undefined) {
+      pending = probeRemoteHostFeatures(remote.client, remote.clientVersion)
+      this.featureProbePromises.set(key, pending)
+      void pending.finally(() => {
+        if (this.featureProbePromises.get(key) === pending) this.featureProbePromises.delete(key)
+      }).catch(() => undefined)
+    }
+    const features = await pending
+    remote.features = features
+    return features
   }
 
   private async ensureConnected(
@@ -975,6 +1040,7 @@ export class ClientModeRuntime {
     this.logger.warn('remote Harness transport closed', { targetDeviceId: shortId(remote.target.deviceId) })
     // CodeX/ACP have separate virtual workspace lifetimes; never replace them
     // with Harness authority after a disconnect.
+    if (!this.closed && this.gatewaySwitch.status().mode === 'remote') this.noteClientAuthFailure(error)
     if (!recover || this.closed) return
     this.reconnect.start(async signal => {
       await cleanup

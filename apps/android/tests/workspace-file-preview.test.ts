@@ -10,6 +10,7 @@ import {
   MAX_DOWNLOAD_BYTES,
   MAX_MISSING_FONTS,
   MAX_OFFICE_SOURCE_BYTES,
+  MAX_PDF_PREVIEW_BYTES,
   MAX_PREVIEW_BYTES,
   PREVIEW_CHUNK_BYTES,
   WORKSPACE_PREVIEW_CHANGED,
@@ -525,6 +526,40 @@ describe('workspace image and PDF previews', () => {
     })
     await expect(loadWorkspacePreview(renamed.tools, 's1', IMAGE_PATH, 'pdf')).rejects.toMatchObject({ code: WORKSPACE_PREVIEW_UNSUPPORTED })
   })
+
+  it('allows the larger PDF preview budget without changing the image budget', async () => {
+    const largerThanImageBudget = new Uint8Array(MAX_PREVIEW_BYTES + 1)
+    largerThanImageBudget.set(new TextEncoder().encode('%PDF-1.4\n'))
+    largerThanImageBudget.set(new TextEncoder().encode('%%EOF'), largerThanImageBudget.length - 5)
+    const pdf = fakeTools()
+    pdf.mocks.statFile.mockResolvedValue({
+      absolutePath: '/workspace/docs/large.pdf', version: VERSION, bytes: largerThanImageBudget.byteLength,
+    })
+    pdf.mocks.readBytes.mockImplementation(async (_session, _path, offset, length) => {
+      const start = offset as number
+      const end = Math.min(largerThanImageBudget.byteLength, start + (length as number))
+      return {
+        absolutePath: '/workspace/docs/large.pdf', version: VERSION, offset: start,
+        data: base64(largerThanImageBudget.subarray(start, end)), eof: end === largerThanImageBudget.byteLength,
+        bytes: largerThanImageBudget.byteLength,
+      }
+    })
+    // This file is larger than the image budget but remains within the PDF budget.
+    await expect(loadWorkspacePreview(pdf.tools, 's1', 'docs/large.pdf', 'pdf')).resolves.toMatchObject({ mimeType: 'application/pdf' })
+
+    const oversized = fakeTools()
+    oversized.mocks.statFile.mockResolvedValue({
+      absolutePath: '/workspace/docs/large.pdf', version: VERSION, bytes: MAX_PDF_PREVIEW_BYTES + 1,
+    })
+    await expect(loadWorkspacePreview(oversized.tools, 's1', 'docs/large.pdf', 'pdf'))
+      .rejects.toMatchObject({ code: WORKSPACE_PREVIEW_TOO_LARGE, details: { maxBytes: MAX_PDF_PREVIEW_BYTES } })
+    expect(oversized.mocks.readBytes).not.toHaveBeenCalled()
+
+    const image = fakeTools()
+    image.mocks.statFile.mockResolvedValue(stat({ bytes: MAX_PREVIEW_BYTES + 1 }))
+    await expect(loadWorkspacePreview(image.tools, 's1', IMAGE_PATH, 'image'))
+      .rejects.toMatchObject({ code: WORKSPACE_PREVIEW_TOO_LARGE, details: { maxBytes: MAX_PREVIEW_BYTES } })
+  })
 })
 
 describe('workspace Office previews', () => {
@@ -620,7 +655,7 @@ describe('workspace Office previews', () => {
               code: WORKSPACE_PREVIEW_INVALID,
             },
             { response: { bytes: PDF_BYTES.byteLength + 1 }, code: WORKSPACE_PREVIEW_INVALID },
-            { response: { bytes: MAX_PREVIEW_BYTES + 1 }, code: WORKSPACE_PREVIEW_TOO_LARGE },
+            { response: { bytes: MAX_PDF_PREVIEW_BYTES + 1 }, code: WORKSPACE_PREVIEW_TOO_LARGE },
             { response: { missingFonts: undefined }, code: WORKSPACE_PREVIEW_INVALID },
             { response: { missingFonts: ['Arial', 7] }, code: WORKSPACE_PREVIEW_INVALID },
             { response: { missingFonts: ['F'.repeat(257)] }, code: WORKSPACE_PREVIEW_INVALID },

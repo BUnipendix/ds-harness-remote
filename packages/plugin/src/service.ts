@@ -24,7 +24,7 @@ import {
 } from './server-api.js'
 import { HostServerConnection } from './server-connection.js'
 import { ServerCredentialStore } from './server-credentials.js'
-import { HarnessRemoteBridge } from './harness-remote-bridge.js'
+import { HarnessRemoteBridge, type ScheduleCreateService } from './harness-remote-bridge.js'
 import type { PluginRouteDispatcher } from './plugin-route-bridge.js'
 import { PluginRouteBridge } from './plugin-route-bridge.js'
 import type { LocalTypertGateway } from './typert-gateway-contract.js'
@@ -52,6 +52,7 @@ export interface HostRemoteStatus {
   configured: boolean
   online: boolean
   reconnecting: boolean
+  recoveryExpiresAt?: number
   lastActiveAt?: number
   error?: string
   account?: string
@@ -88,6 +89,8 @@ export class HostPluginRuntime {
     /** PTY-backed terminal provider from the Host `subprocess` service, when present. */
     private readonly terminalSpawner?: RemoteTerminalSpawner,
     private readonly pluginRoutes?: (peer?: unknown) => PluginRouteDispatcher | undefined,
+    /** Host `schedule` service; absent on Hosts whose composition omits reminders. */
+    private readonly schedule?: ScheduleCreateService,
   ) {
     this.terminalEnabled = config.terminal.enabled
     this.loopbackPorts = [...config.loopback.ports]
@@ -108,6 +111,13 @@ export class HostPluginRuntime {
               this.codexWorkspaceState,
               this.terminalSpawner,
             ),
+            workspaceUploadRootResolver(
+              peerGateway,
+              () => harnessSessionGeneration(this.harnessVersion) === 'v3',
+              threadId => this.codex.resolveThreadWorkspace(context.connectionId, threadId),
+              sessionId => this.acp.resolveUploadWorkspace(context.connectionId, sessionId),
+            ),
+            this.schedule,
           )
         : undefined
       const fileViewer = new RemoteFileViewerBridge(
@@ -221,13 +231,14 @@ export class HostPluginRuntime {
       configured: this.serverApi !== undefined,
       online: this.serverConnection?.isOnline() ?? false,
       reconnecting: this.serverConnection?.isReconnecting() ?? false,
+      recoveryExpiresAt: this.serverConnection?.recoveryExpiresAt(),
       ...(this.serverConnection?.lastActivity() === undefined
         ? {}
         : { lastActiveAt: this.serverConnection.lastActivity() }),
       ...(error === undefined ? {} : { error }),
       ...(authorization?.account === undefined ? {} : { account: authorization.account }),
       authorized: authorization !== undefined,
-      accountRequired: error === 'ACCOUNT_AUTH_REQUIRED' || error === 'AUTH_INVALID' || error === 'TOKEN_EXPIRED' || error === 'DEVICE_REVOKED',
+      accountRequired: error === 'ACCOUNT_AUTH_REQUIRED' || error === 'AUTH_REQUIRED' || error === 'AUTH_INVALID' || error === 'TOKEN_EXPIRED' || error === 'DEVICE_REVOKED' || error === 'DEVICE_OWNERSHIP_REQUIRED',
       connectedClients: this.listConnectedClients(),
     }
   }
@@ -536,7 +547,7 @@ export class HostPluginRuntime {
     for (const backend of this.acp.enabledBackends()) {
       types.push({
         id: backend,
-        name: backend === 'claude' ? 'Claude' : backend === 'pi' ? 'Pi' : backend === 'cursor' ? 'Cursor' : backend === 'antigravity' ? 'Antigravity' : backend === 'opencode' ? 'OpenCode' : backend,
+        name: backend === 'claude' ? 'Claude' : backend === 'hermes' ? 'Hermes' : backend === 'pi' ? 'Pi' : backend === 'cursor' ? 'Cursor' : backend === 'antigravity' ? 'Antigravity' : backend === 'opencode' ? 'OpenCode' : backend,
         capability: `agent.acp.${backend}.v1`,
         available: readyBackends.includes(backend),
       })

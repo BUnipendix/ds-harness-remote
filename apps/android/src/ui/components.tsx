@@ -15,7 +15,7 @@ import {
 import { BlurTargetView, BlurView } from 'expo-blur'
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg'
 import { AlertCircle, ArrowLeft, ChevronRight, CircleCheck, RefreshCw, WifiOff, type LucideIcon } from 'lucide-react-native'
-import { radius, spacing, type } from './theme'
+import { floatingShadow, radius, spacing, type } from './theme'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useTheme, type ThemeColors } from './theme-context'
 import { useThemedStyles } from './use-themed-styles'
@@ -65,6 +65,8 @@ export function Screen({ children, scroll = true, refreshing = false, onRefresh,
 
 const HeaderBlurTargetContext = createContext<RefObject<View | null> | undefined>(undefined)
 const HeaderInsetContext = createContext(0)
+/** Set inside the TopBar's floating chips so icon buttons size themselves to the chip. */
+const FloatingChipContext = createContext(false)
 
 /** Height of the overlaid header that scrollable content must pad its top by; 0 outside a `BlurHeaderFrame`. */
 export function useHeaderInset(): number {
@@ -179,14 +181,18 @@ export function TopBar({
         <View
           style={[
             StyleSheet.absoluteFill,
-            { backgroundColor: scheme === 'dark' ? 'rgba(20, 20, 24, 0.65)' : 'rgba(255, 255, 255, 0.60)' }
+            { backgroundColor: scheme === 'dark' ? 'rgba(11, 13, 17, 0.72)' : 'rgba(248, 248, 248, 0.85)' }
           ]}
           pointerEvents="none"
         />
       )}
       <View style={[styles.topBarSide, !!centered && { width: typeof centered === 'number' ? centered : 48 }]}>
         {onBack !== undefined && (
-          <IconButton label={backLabel ?? zhCN.common.back} icon={backIcon ?? ArrowLeft} onPress={onBack} hitSlop={8} />
+          <View style={styles.floatingChip}>
+            <FloatingChipContext.Provider value>
+              <IconButton label={backLabel ?? zhCN.common.back} icon={backIcon ?? ArrowLeft} onPress={onBack} hitSlop={8} />
+            </FloatingChipContext.Provider>
+          </View>
         )}
       </View>
       <View style={styles.topBarTitles}>
@@ -223,14 +229,16 @@ export function TopBar({
       </View>
       <View style={[styles.topBarSide, styles.topBarTrailing, !!centered && { width: typeof centered === 'number' ? centered : 48 }]}>
         {action !== undefined && action !== null && (
-          <View style={styles.topBarActions}>{action}</View>
+          <View style={[styles.floatingChip, styles.topBarActions]}>
+            <FloatingChipContext.Provider value>{action}</FloatingChipContext.Provider>
+          </View>
         )}
       </View>
     </View>
   )
 }
 
-export function IconButton({ label, icon: Icon, onPress, disabled = false, tint, fill, dense = false, hitSlop }: {
+export function IconButton({ label, icon: Icon, onPress, disabled = false, tint, fill, dense = false, hitSlop, filled = false }: {
   label: string
   icon: ComponentType<{ size?: number; color?: string; fill?: string; strokeWidth?: number }>
   onPress: () => void
@@ -248,9 +256,12 @@ export function IconButton({ label, icon: Icon, onPress, disabled = false, tint,
   dense?: boolean
   /** Optional larger touch expansion for controls placed at screen edges. */
   hitSlop?: number
+  /** Solid DeepSeek-blue disc for the screen's primary action (e.g. create). */
+  filled?: boolean
 }) {
   const { colors } = useTheme()
   const styles = useThemedStyles(createStyles)
+  const inChip = useContext(FloatingChipContext)
   return (
     <Pressable
       accessibilityRole="button"
@@ -261,11 +272,13 @@ export function IconButton({ label, icon: Icon, onPress, disabled = false, tint,
       style={({ pressed }) => [
         styles.iconButton,
         dense && styles.iconButtonDense,
-        pressed && styles.iconButtonPressed,
+        inChip && styles.iconButtonInChip,
+        filled && styles.iconButtonFilled,
+        pressed && (filled ? styles.iconButtonFilledPressed : styles.iconButtonPressed),
         disabled && styles.disabled,
       ]}
     >
-      <Icon size={dense ? 20 : 21} color={tint ?? colors.ink} fill={fill ?? 'none'} strokeWidth={2} />
+      <Icon size={dense || inChip ? 20 : 21} color={filled ? colors.white : tint ?? colors.ink} fill={fill ?? 'none'} strokeWidth={filled ? 2.2 : 1.9} />
     </Pressable>
   )
 }
@@ -274,7 +287,7 @@ export function Button({ label, onPress, icon: Icon, variant = 'primary', loadin
   label: string
   onPress: () => void
   icon?: LucideIcon
-  variant?: 'primary' | 'secondary' | 'danger' | 'quiet'
+  variant?: 'primary' | 'secondary' | 'danger' | 'quiet' | 'inverse'
   loading?: boolean
   disabled?: boolean
 }) {
@@ -297,9 +310,9 @@ export function Button({ label, onPress, icon: Icon, variant = 'primary', loadin
       ]}
     >
       {loading
-        ? <ActivityIndicator size="small" color={variant === 'primary' || variant === 'danger' ? colors.white : colors.ink} />
-        : Icon !== undefined && <Icon size={19} color={variant === 'primary' || variant === 'danger' ? colors.white : colors.ink} />}
-      <Text style={[styles.buttonText, (variant === 'primary' || variant === 'danger') && styles.buttonTextOnColor]}>{label}</Text>
+        ? <ActivityIndicator size="small" color={variant === 'inverse' ? colors.onInverse : variant === 'primary' || variant === 'danger' ? colors.white : colors.ink} />
+        : Icon !== undefined && <Icon size={19} color={variant === 'inverse' ? colors.onInverse : variant === 'primary' || variant === 'danger' ? colors.white : colors.ink} />}
+      <Text style={[styles.buttonText, (variant === 'primary' || variant === 'danger') && styles.buttonTextOnColor, variant === 'inverse' && { color: colors.onInverse }]}>{label}</Text>
     </Pressable>
   )
 }
@@ -444,12 +457,102 @@ export function SuccessNotice({ children }: { children: ReactNode }) {
   return <View style={styles.successNotice}><CircleCheck size={19} color={colors.success} /><Text style={styles.successNoticeText}>{children}</Text></View>
 }
 
+/** Rounded inset section, the settings-style container used across screens. */
+export function GroupCard({ children, style, raised = false }: { children: ReactNode; style?: StyleProp<ViewStyle>; raised?: boolean }) {
+  const styles = useThemedStyles(createStyles)
+  // A raised card casts its shadow from an unclipped shell and clips rows in an inner layer.
+  if (raised) return <View style={[styles.groupCardRaised, style]}><View style={styles.groupCardClip}>{children}</View></View>
+  return <View style={[styles.groupCard, style]}>{children}</View>
+}
+
+/**
+ * One row of a `GroupCard`: leading line icon, label, optional trailing value
+ * or accessory and a chevron when pressable. Rows after the first draw an
+ * inset separator aligned with the label.
+ */
+export function GroupRow({ icon: Icon, iconSpace = false, label, detail, value, accessory, onPress, first = false, danger = false, chevron, selected = false, accessibilityLabel, disabled = false }: {
+  icon?: ComponentType<{ size?: number; color?: string; strokeWidth?: number }>
+  /** Keep the icon column empty so the label lines up with iconed sibling rows. */
+  iconSpace?: boolean
+  label: string
+  detail?: string
+  value?: string
+  accessory?: ReactNode
+  onPress?: () => void
+  first?: boolean
+  danger?: boolean
+  chevron?: boolean
+  selected?: boolean
+  accessibilityLabel?: string
+  disabled?: boolean
+}) {
+  const { colors } = useTheme()
+  const styles = useThemedStyles(createStyles)
+  const showChevron = chevron ?? (onPress !== undefined && accessory === undefined)
+  const content = ({ pressed }: { pressed: boolean }) => (
+    <View style={[styles.groupRow, pressed && styles.groupRowPressed]}>
+      {Icon !== undefined
+        ? <View style={styles.groupRowIcon}><Icon size={21} color={danger ? colors.danger : selected ? colors.primary : colors.ink} strokeWidth={1.8} /></View>
+        : iconSpace && <View style={styles.groupRowIcon} />}
+      <View style={[styles.groupRowBody, !first && styles.groupRowDivider]}>
+        <View style={styles.groupRowCopy}>
+          <Text style={[styles.groupRowLabel, danger && { color: colors.danger }, selected && { color: colors.primary }]} numberOfLines={1}>{label}</Text>
+          {detail !== undefined && <Text style={styles.groupRowDetail} numberOfLines={3}>{detail}</Text>}
+        </View>
+        {value !== undefined && <Text style={styles.groupRowValue} numberOfLines={1}>{value}</Text>}
+        {accessory}
+        {showChevron && <ChevronRight size={19} color={colors.subtle} />}
+      </View>
+    </View>
+  )
+  if (onPress === undefined) return content({ pressed: false })
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityState={{ selected, disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={disabled ? styles.disabled : undefined}
+    >
+      {content}
+    </Pressable>
+  )
+}
+
+/** Rounded filter pill with an optional count, as in "全部 3 · 已归档 1". */
+export function FilterChip({ label, count, selected, onPress, icon: Icon }: {
+  label: string
+  count?: number
+  selected: boolean
+  onPress: () => void
+  icon?: ComponentType<{ size?: number; color?: string; strokeWidth?: number }>
+}) {
+  const { colors } = useTheme()
+  const styles = useThemedStyles(createStyles)
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={count === undefined ? label : `${label} ${count}`}
+      accessibilityState={{ selected }}
+      onPress={onPress}
+      hitSlop={4}
+      style={({ pressed }) => [styles.filterChip, selected && styles.filterChipSelected, pressed && styles.buttonPressed]}
+    >
+      {Icon !== undefined && <Icon size={15} color={selected ? colors.ink : colors.muted} strokeWidth={2} />}
+      <Text style={[styles.filterChipText, selected && styles.filterChipTextSelected]} numberOfLines={1}>{label}</Text>
+      {count !== undefined && <Text style={styles.filterChipCount}>{count}</Text>}
+    </Pressable>
+  )
+}
+
 function createButtonStyles(colors: ThemeColors) {
   return StyleSheet.create({
     primary: { backgroundColor: colors.primary },
     secondary: { backgroundColor: colors.surfaceStrong },
     danger: { backgroundColor: colors.danger },
     quiet: { backgroundColor: 'transparent' },
+    inverse: { backgroundColor: colors.inverse },
   })
 }
 
@@ -470,23 +573,26 @@ function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     screen: { flex: 1, backgroundColor: colors.background },
     screenContent: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xxxl },
-    topBar: { minHeight: 60, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.separator, backgroundColor: colors.surface },
+    topBar: { minHeight: 60, paddingHorizontal: spacing.md, paddingVertical: spacing.xs, flexDirection: 'row', alignItems: 'center', backgroundColor: colors.background },
     frameContent: { flex: 1 },
     frameFade: { position: 'absolute', top: '100%', left: 0, right: 0, height: spacing.lg },
     frameHeader: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10 },
     topBarBlurred: { backgroundColor: 'transparent', borderBottomWidth: 0 },
     topBarWithSubtitle: { minHeight: 68, paddingVertical: spacing.sm },
-    topBarSide: { minWidth: 48, flexDirection: 'row', alignItems: 'center' },
+    topBarSide: { minWidth: 44, flexDirection: 'row', alignItems: 'center' },
+    // Floating chip: a white disc for one control, a capsule for several.
+    floatingChip: { minWidth: 44, height: 44, borderRadius: radius.pill, backgroundColor: colors.elevated, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth, borderColor: colors.separator, ...floatingShadow(colors) },
     topBarTrailing: { justifyContent: 'flex-end' },
-    topBarActions: { flexDirection: 'row', alignItems: 'center' },
+    topBarActions: { paddingHorizontal: 2, gap: 0 },
     topBarTitles: { flex: 1, minWidth: 0, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.xs, gap: 1 },
     topBarTitle: {
       ...type.heading,
-      fontSize: 16,
+      fontSize: 17,
       lineHeight: 22,
       textAlign: 'center',
       color: colors.ink,
       fontWeight: '700',
+      letterSpacing: -0.2,
     },
     topBarTitleLink: { flexShrink: 1 },
     topBarTitleRow: { alignSelf: 'stretch', minHeight: 48, maxWidth: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.xs, borderRadius: radius.pill },
@@ -494,15 +600,18 @@ function createStyles(colors: ThemeColors) {
     topBarSubtitle: { ...type.caption, color: colors.muted, textAlign: 'center', flexShrink: 1 },
     iconButton: { width: 48, height: 48, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center' },
     iconButtonDense: { width: 40, height: 40 },
+    iconButtonInChip: { width: 40, height: 40 },
     iconButtonPressed: { backgroundColor: colors.surfaceStrong },
-    button: { minHeight: 50, paddingHorizontal: spacing.lg, borderRadius: radius.md, flexDirection: 'row', gap: spacing.xs, alignItems: 'center', justifyContent: 'center' },
+    iconButtonFilled: { backgroundColor: colors.primary },
+    iconButtonFilledPressed: { backgroundColor: colors.primaryPressed },
+    button: { minHeight: 50, paddingHorizontal: spacing.xl, borderRadius: radius.pill, flexDirection: 'row', gap: spacing.xs, alignItems: 'center', justifyContent: 'center' },
     buttonPressed: { opacity: 0.82 },
     buttonText: { ...type.bodyStrong, color: colors.ink },
     buttonTextOnColor: { color: colors.white },
     disabled: { opacity: 0.52 },
     field: { gap: 7 },
     fieldLabel: { ...type.smallStrong, color: colors.ink },
-    input: { minHeight: 52, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, paddingHorizontal: spacing.md, backgroundColor: colors.background, ...type.body, color: colors.ink },
+    input: { minHeight: 52, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, paddingHorizontal: spacing.md, backgroundColor: colors.surface, ...type.body, color: colors.ink },
     inputMultiline: { minHeight: 104, paddingTop: spacing.sm, textAlignVertical: 'top' },
     inputError: { borderColor: colors.danger },
     fieldHint: { ...type.small, color: colors.muted },
@@ -510,17 +619,17 @@ function createStyles(colors: ThemeColors) {
     badge: { height: 28, paddingHorizontal: 10, borderRadius: radius.pill, flexDirection: 'row', alignItems: 'center', gap: 6 },
     badgeDot: { width: 7, height: 7, borderRadius: radius.pill },
     badgeText: { ...type.caption },
-    errorBanner: { marginHorizontal: spacing.lg, marginTop: spacing.sm, borderRadius: radius.md, padding: spacing.sm, backgroundColor: colors.dangerSoft, flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+    errorBanner: { marginHorizontal: spacing.lg, marginTop: spacing.sm, borderRadius: radius.lg, padding: spacing.sm, backgroundColor: colors.dangerSoft, flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
     errorBannerText: { ...type.small, color: colors.ink, flex: 1, minWidth: 0 },
     errorButton: { minWidth: 44, minHeight: 44, flexShrink: 0, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.xs },
     errorAction: { ...type.smallStrong, color: colors.danger, paddingVertical: 2 },
     emptyState: { paddingVertical: 56, alignItems: 'center', paddingHorizontal: spacing.xl },
-    emptyIcon: { width: 52, height: 52, borderRadius: radius.lg, backgroundColor: colors.primarySoft, alignItems: 'center', justifyContent: 'center', marginBottom: spacing.md },
+    emptyIcon: { width: 56, height: 56, borderRadius: radius.xl, backgroundColor: colors.primarySoft, alignItems: 'center', justifyContent: 'center', marginBottom: spacing.md },
     emptyTitle: { ...type.heading, color: colors.ink, textAlign: 'center' },
     emptyBody: { ...type.body, color: colors.muted, textAlign: 'center', marginTop: spacing.xs, maxWidth: 320 },
     emptyAction: { marginTop: spacing.xl, alignSelf: 'stretch' },
     listRow: { minHeight: 82, paddingVertical: spacing.md, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.separator },
-    listRowPressed: { backgroundColor: colors.surface },
+    listRowPressed: { backgroundColor: colors.surfaceStrong },
     rowIcon: { width: 42, height: 42, borderRadius: radius.md, backgroundColor: colors.primarySoft, alignItems: 'center', justifyContent: 'center' },
     rowCopy: { flex: 1, gap: 3 },
     rowTitleLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.xs },
@@ -528,9 +637,9 @@ function createStyles(colors: ThemeColors) {
     rowDetailLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
     rowSubtitle: { ...type.small, color: colors.muted },
     rowInlineSubtitle: { flex: 1 },
-    rowMeta: { ...type.caption, color: colors.subtle },
-    sectionTitleRow: { marginTop: spacing.xxl, marginBottom: spacing.xs, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-    sectionTitle: { ...type.smallStrong, color: colors.muted },
+    rowMeta: { ...type.caption, color: colors.muted },
+    sectionTitleRow: { minHeight: 36, marginTop: spacing.xl, marginBottom: spacing.xs, paddingLeft: spacing.md, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    sectionTitle: { ...type.small, fontSize: 15, lineHeight: 20, fontWeight: '600', color: colors.muted },
     keyValue: { paddingVertical: spacing.sm, flexDirection: 'row', gap: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.separator },
     keyLabel: { ...type.small, color: colors.muted, maxWidth: '40%' },
     keyValueText: { ...type.smallStrong, color: colors.ink, flex: 1, textAlign: 'right' },
@@ -545,5 +654,22 @@ function createStyles(colors: ThemeColors) {
     skeletonText: { width: '78%', height: 11, borderRadius: 4, backgroundColor: colors.surface },
     successNotice: { padding: spacing.sm, borderRadius: radius.md, backgroundColor: colors.successSoft, flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
     successNoticeText: { ...type.small, color: colors.ink, flex: 1 },
+    groupCard: { borderRadius: radius.xl, backgroundColor: colors.card, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.separator, overflow: 'hidden' },
+    groupCardRaised: { borderRadius: radius.xl, backgroundColor: colors.card, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.separator, ...floatingShadow(colors) },
+    groupCardClip: { borderRadius: radius.xl, overflow: 'hidden' },
+    groupRow: { minHeight: 58, paddingLeft: spacing.md, flexDirection: 'row', alignItems: 'center' },
+    groupRowPressed: { backgroundColor: colors.surfaceStrong },
+    groupRowIcon: { width: 28, marginRight: spacing.sm, alignItems: 'center', justifyContent: 'center' },
+    groupRowBody: { flex: 1, minWidth: 0, minHeight: 58, paddingRight: spacing.md, paddingVertical: spacing.sm, flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+    groupRowDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+    groupRowCopy: { flex: 1, minWidth: 0, gap: 2 },
+    groupRowLabel: { ...type.body, fontSize: 16, color: colors.ink },
+    groupRowDetail: { ...type.small, fontSize: 13, lineHeight: 18, color: colors.muted },
+    groupRowValue: { ...type.small, fontSize: 15, color: colors.muted, maxWidth: '45%' },
+    filterChip: { height: 36, paddingHorizontal: 14, borderRadius: radius.pill, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'transparent' },
+    filterChipSelected: { backgroundColor: colors.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.separator, ...floatingShadow(colors) },
+    filterChipText: { ...type.small, fontSize: 15, color: colors.muted },
+    filterChipTextSelected: { color: colors.ink, fontWeight: '600' },
+    filterChipCount: { ...type.small, fontSize: 15, color: colors.subtle },
   })
 }

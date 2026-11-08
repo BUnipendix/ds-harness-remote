@@ -1,4 +1,5 @@
 import type { CodexPermissionPreset } from '@dsh-remote/protocol'
+import { projectCodexModel } from '@dsh-remote/client-core'
 import type { HarnessSessionGeneration } from '../harness-version.js'
 import { collectImageBlocks, toolOutputImageBlocks } from './codex-image-codec.js'
 import { codexPermissionPresetFromResponse } from './permissions.js'
@@ -48,7 +49,7 @@ export interface CodexLiveProjectionContext {
   readonly setPermissionSelection: (sessionId: string, preset: CodexPermissionPreset | undefined) => void
   readonly emitRemoteEvent: (event: string, args: unknown[]) => void
   readonly selectedModels: Map<string, CodexModelSelection>
-  readonly refreshAndPublishWorkspaces: () => Promise<void>
+  readonly refreshAndPublishWorkspaces: (force?: boolean) => Promise<void>
   readonly pendingApprovals: Map<string, PendingApproval>
   readonly emitApproval: (input: { eventId: string; agentId: string; request: JsonRecord; }) => void
   readonly imageAttachments: Map<string, CodexImageAttachmentEntry>
@@ -60,10 +61,14 @@ export class CodexLiveProjection {
   async sessionFollow(request: JsonRecord, signal: AbortSignal): Promise<AsyncIterable<unknown>> {
     const sessionId = sessionIdFromAddress(record(request.address))
     const threadId = nativeThreadId(sessionId)
-    const history = await this.context.readHistoryPage(threadId, {
+    // History and model metadata are independent reads. The workspace catalog
+    // is refreshed after the stream is ready so a slow project/thread index
+    // cannot delay the first session snapshot.
+    const historyPromise = this.context.readHistoryPage(threadId, {
       maxMessages: optionalPositiveInteger(request.maxMessages),
     }, signal)
-    const directory = await this.context.models(signal).catch(() => undefined)
+    const directoryPromise = this.context.models(signal).catch(() => undefined)
+    const [history, directory] = await Promise.all([historyPromise, directoryPromise])
     const queue = new AsyncValueQueue(signal)
     const follow: FollowState = {
       sessionId,
@@ -117,6 +122,7 @@ export class CodexLiveProjection {
         throw new Error('The CodeX virtual Harness is closed.')
       }
       follow.close = () => stream.close()
+      void this.context.refreshAndPublishWorkspaces().catch(() => undefined)
     } catch (error) {
       this.context.follows.delete(follow)
       queue.close()
@@ -147,6 +153,21 @@ export class CodexLiveProjection {
     }
     if (frame.method === 'turn/started') {
       const turn = record(params.turn)
+      const turnModel = projectCodexModel(turn)
+      if (turnModel.model !== undefined) {
+        const selected: CodexModelSelection = {
+          provider: CODEX_PROVIDER,
+          model: turnModel.model,
+          ...(turnModel.reasoningEffort === undefined ? {} : { reasoningEffort: turnModel.reasoningEffort }),
+        }
+        this.context.selectedModels.set(follow.sessionId, selected)
+        this.context.publishProjection(
+          follow.sessionId,
+          'modelSelection',
+          modelSelectionProjection(selected),
+          this.context.nextProjectionSeq(),
+        )
+      }
       this.endAssistantAttempt(follow, { kind: 'abandoned' })
       this.resetLiveTurn(follow)
       follow.turn += 1
@@ -276,15 +297,19 @@ export class CodexLiveProjection {
       }
       this.pushEvent(follow, 'turn/end', {
         turn: follow.turn,
-        reason: turn.status === 'failed' || turn.error !== undefined && turn.error !== null
-          ? { kind: 'error', error: { message: 'CodeX turn failed.', code: 'codex-turn-failed' } }
-          : { kind: 'completed' },
+        reason: turnEndReason(turn),
       })
       this.context.emitRemoteEvent('api-session/status', [follow.sessionId, false])
       this.context.emitRemoteEvent('api-session/activity', [follow.sessionId, Date.now()])
       follow.activeTurnId = undefined
       this.context.pendingRequestIds.delete(follow.sessionId)
-      void this.context.refreshAndPublishWorkspaces()
+      // A burst of completed turns should publish from one short-lived
+      // catalog snapshot instead of starting a full project/thread scan for
+      // every follow at once.
+      // Completion must observe a fresh upstream catalog. Reusing the short
+      // catalog cache here can publish the pre-completion `running` snapshot
+      // after the authoritative turn/end event and make clients look stuck.
+      void this.context.refreshAndPublishWorkspaces(true)
       return
     }
     if (frame.method === 'item/commandExecution/requestApproval'
@@ -573,4 +598,14 @@ export class CodexLiveProjection {
     follow.queue.close()
     this.context.emitRemoteEvent('api-session/status', [follow.sessionId, false])
   }
+}
+
+function turnEndReason(turn: JsonRecord): JsonRecord {
+  if (turn.status === 'failed' || turn.error !== undefined && turn.error !== null) {
+    return { kind: 'error', error: { message: 'CodeX turn failed.', code: 'codex-turn-failed' } }
+  }
+  if (turn.status === 'interrupted' || turn.status === 'cancelled' || turn.status === 'canceled' || turn.status === 'aborted') {
+    return { kind: 'interrupted' }
+  }
+  return { kind: 'completed' }
 }

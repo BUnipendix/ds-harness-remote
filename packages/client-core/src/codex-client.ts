@@ -21,6 +21,9 @@ export interface DisplaySession {
   title?: string
   preview?: string
   cwd?: string
+  /** Model reported by the CodeX Thread or its most recent Turn. */
+  model?: string
+  reasoningEffort?: string
   createdAt: number
   updatedAt: number
   status: 'idle' | 'running' | 'waiting' | 'failed'
@@ -289,20 +292,55 @@ export function projectCodexThread(value: unknown): DisplaySession | undefined {
   if (!isRecord(value) || typeof value.id !== 'string') return undefined
   const createdAt = normalizeTimestamp(value.createdAt)
   const updatedAt = normalizeTimestamp(value.updatedAt) || createdAt
+  const model = projectCodexModel(value)
+  const preview = typeof value.preview === 'string' && value.preview.trim().length > 0
+    ? value.preview : firstUserPreview(projectCodexHistory(value))
   return {
     id: `codex:${value.id}`,
     backend: 'codex',
     nativeId: value.id,
     ...(typeof value.sessionId === 'string' ? { sessionTreeId: value.sessionId } : {}),
     ...(typeof value.name === 'string' && value.name.length > 0 ? { title: value.name } : {}),
-    ...(typeof value.preview === 'string' && value.preview.length > 0 ? { preview: value.preview } : {}),
+    ...(preview === undefined ? {} : { preview }),
     ...(typeof value.cwd === 'string' ? { cwd: value.cwd } : {}),
+    ...(model.model === undefined ? {} : { model: model.model }),
+    ...(model.reasoningEffort === undefined ? {} : { reasoningEffort: model.reasoningEffort }),
     createdAt,
     updatedAt,
     status: projectThreadStatus(value.status),
     ...(typeof value.archived === 'boolean' ? { archived: value.archived } : {}),
     ...(typeof value.isPinned === 'boolean' ? { pinned: value.isPinned } : {}),
   }
+}
+
+/**
+ * Extract model metadata without assuming one App Server release's exact
+ * Thread shape. Newer servers put it on the Thread, while older responses
+ * expose it only on the most recent Turn.
+ */
+export function projectCodexModel(value: unknown): { model?: string; reasoningEffort?: string } {
+  if (!isRecord(value)) return {}
+  const candidates: unknown[] = []
+  if (Array.isArray(value.turns)) {
+    for (let index = value.turns.length - 1; index >= 0; index -= 1) candidates.push(value.turns[index])
+  }
+  candidates.push(value)
+  for (const candidate of candidates) {
+    if (!isRecord(candidate)) continue
+    const model = typeof candidate.model === 'string' && candidate.model.length > 0
+      ? candidate.model
+      : typeof candidate.modelId === 'string' && candidate.modelId.length > 0
+        ? candidate.modelId
+        : undefined
+    if (model === undefined) continue
+    const reasoningEffort = typeof candidate.reasoningEffort === 'string' && candidate.reasoningEffort.length > 0
+      ? candidate.reasoningEffort
+      : typeof candidate.effort === 'string' && candidate.effort.length > 0
+        ? candidate.effort
+        : undefined
+    return { model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) }
+  }
+  return {}
 }
 
 /**
@@ -377,9 +415,48 @@ export function reduceCodexTimelineFrame(
   state: CodexTimelineState,
   frame: { method: string; params: unknown },
 ): CodexTimelineState {
+  const next = reduceCodexFrame(state, frame)
+  if (next.session.preview?.trim()) return next
+  const preview = firstUserPreview(next.items)
+  return preview === undefined ? next : { ...next, session: { ...next.session, preview } }
+}
+
+/** A live Thread has no preview until a later read; retain its first user message. */
+function firstUserPreview(items: DisplayHistoryItem[]): string | undefined {
+  for (const item of items) {
+    if (item.kind !== 'message' || item.role !== 'user') continue
+    const preview = item.text?.replace(/\s+/g, ' ').trim().slice(0, 160)
+    if (preview) return preview
+  }
+  return undefined
+}
+
+function reduceCodexFrame(
+  state: CodexTimelineState,
+  frame: { method: string; params: unknown },
+): CodexTimelineState {
   const params = isRecord(frame.params) ? frame.params : {}
   if (frame.method === 'thread/status/changed') {
-    return { ...state, session: { ...state.session, status: projectThreadStatus(params.status) } }
+    const status = projectThreadStatus(params.status)
+    // An inactive/system-error status is terminal evidence for the current
+    // turn even if the App Server omits or delays turn/completed. Clear the
+    // turn handle so a later approval resolution cannot revive `running`.
+    if (status === 'idle' || status === 'failed') {
+      const terminalItemStatus = status === 'failed' ? 'failed' as const : 'completed' as const
+      const next = {
+        ...state,
+        session: { ...state.session, status },
+        // Some App Server failure paths report only thread/status/changed and
+        // omit turn/completed. Settle transient rows so the UI cannot keep an
+        // assistant spinner or running tool forever.
+        items: state.items.map(item => item.status === 'running'
+          ? { ...item, status: terminalItemStatus }
+          : item),
+      }
+      delete next.activeTurnId
+      return next
+    }
+    return { ...state, session: { ...state.session, status } }
   }
   if (frame.method === 'thread/name/updated' && typeof params.threadName === 'string') {
     return { ...state, session: { ...state.session, title: params.threadName } }

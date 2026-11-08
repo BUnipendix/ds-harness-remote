@@ -48,4 +48,11 @@ export const OfficialMenuIcons = {
   newChat: officialIcon('newChat'),
   sliders: officialIcon('sliders'),
   edit: officialIcon('edit'),
+  pin: officialIcon('pin'),
+  pinFill: officialIcon('pinFill'),
+  fork: officialIcon('fork'),
+  archive: officialIcon('archive'),
+  unarchive: officialIcon('unarchive'),
+  copy: officialIcon('copy'),
+  ellipsis: officialIcon('ellipsis'),
 } satisfies Record<OfficialMenuIconKind, ComponentType<MenuIconProps>>

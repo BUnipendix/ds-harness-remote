@@ -7,7 +7,19 @@ import { foldHistory } from '../src/state/event-reducer'
 
 const { client, proxy } = vi.hoisted(() => ({
   client: { request: vi.fn(), subscribe: vi.fn(), configureHistory: vi.fn() },
-  proxy: { sessionHistory: vi.fn(), messageFeedbackList: vi.fn(), sessionPrompt: vi.fn() },
+  proxy: {
+    sessionHistory: vi.fn(),
+    messageFeedbackList: vi.fn(),
+    sessionPrompt: vi.fn(),
+    workspacePinSession: vi.fn(),
+    workspaceUnpinSession: vi.fn(),
+    workspaceArchiveSession: vi.fn(),
+    workspaceUnarchiveSession: vi.fn(),
+    sessionRename: vi.fn(),
+    sessionFork: vi.fn(),
+    sessionList: vi.fn(),
+    workspaceList: vi.fn(),
+  },
 }))
 vi.mock('expo-haptics', () => ({ impactAsync: vi.fn(), ImpactFeedbackStyle: { Light: 'light' } }))
 vi.mock('../src/services/storage', () => ({ loadCodexPermissionPresets: async () => ({}), saveCodexPermissionPreset: vi.fn(), saveRecentWorkspaces: vi.fn() }))
@@ -299,5 +311,142 @@ describe('backend separated conversation drawer', () => {
     expect(harness.find(g => g.key === 'unassigned:harness')?.sessions).toEqual([loose])
     expect(browseStatus({...unknown, projections: {values: {remoteStatusKnown: false}}}, { running: false })).toBe('unknown')
     expect(browseStatus(h, { running: true })).toBe('running')
+  })
+})
+
+describe('session pin, unpin, rename, unarchive, and fork actions', () => {
+  beforeEach(() => {
+    prepareScenario()
+  })
+
+  it('pins a session and updates pinnedSessionIds in store', async () => {
+    proxy.workspacePinSession.mockResolvedValueOnce(['h-1'])
+    const ok = await state.pinSession('h-1')
+
+    expect(ok).toBe(true)
+    expect(proxy.workspacePinSession).toHaveBeenCalledWith('h-1')
+    expect(state.pinnedSessionIds).toEqual(['h-1'])
+  })
+
+  it('unpins a session and updates pinnedSessionIds in store', async () => {
+    state.pinnedSessionIds = ['h-1', 'h-2']
+    proxy.workspaceUnpinSession.mockResolvedValueOnce(['h-2'])
+    const ok = await state.unpinSession('h-1')
+
+    expect(ok).toBe(true)
+    expect(proxy.workspaceUnpinSession).toHaveBeenCalledWith('h-1')
+    expect(state.pinnedSessionIds).toEqual(['h-2'])
+  })
+
+  it('unarchives a session and updates archivedSessionIds in store', async () => {
+    state.archivedSessionIds = ['h-1']
+    proxy.workspaceUnarchiveSession.mockResolvedValueOnce([])
+    const ok = await state.unarchiveSession('h-1')
+
+    expect(ok).toBe(true)
+    expect(proxy.workspaceUnarchiveSession).toHaveBeenCalledWith('h-1')
+    expect(state.archivedSessionIds).toEqual([])
+  })
+
+  it('renames a session and updates the title in sessions and selectedSession', async () => {
+    const s1 = session('s1', false)
+    state.sessions = [s1]
+    state.selectedSession = s1
+    proxy.sessionRename.mockResolvedValueOnce({ title: 'New Renamed Title', seq: 5 })
+    const ok = await state.renameSession('s1', '  New Renamed Title  ')
+
+    expect(ok).toBe(true)
+    expect(proxy.sessionRename).toHaveBeenCalledWith('s1', 'New Renamed Title')
+    expect(state.sessions.find(s => s.sessionId === 's1')?.title).toBe('New Renamed Title')
+    expect(state.selectedSession?.title).toBe('New Renamed Title')
+  })
+
+  it('rejects empty title for rename without calling host', async () => {
+    const ok = await state.renameSession('s1', '   ')
+    expect(ok).toBe(false)
+    expect(proxy.sessionRename).not.toHaveBeenCalled()
+  })
+
+  it('forks a session at latest state and opens the child session', async () => {
+    const s1 = session('s1', false)
+    const forked = { ...session('forked-1', false), title: 'Forked Conversation' }
+    state.sessions = [s1]
+    proxy.sessionFork.mockResolvedValueOnce({ sessionId: 'forked-1' })
+    proxy.sessionList.mockResolvedValueOnce([s1, forked])
+    proxy.workspaceList.mockResolvedValueOnce({
+      items: [],
+      archivedSessionIds: [],
+      pinnedSessionIds: ['s1'],
+    })
+
+    const result = await state.forkSession('s1')
+    expect(result?.sessionId).toBe('forked-1')
+    expect(proxy.sessionFork).toHaveBeenCalledWith('s1')
+    expect(state.sessions).toContainEqual(forked)
+    expect(state.pinnedSessionIds).toEqual(['s1'])
+  })
+
+  it('preserves non-harness sessions and workspaces when forking a harness session', async () => {
+    const codexSession = { ...session('codex-1', false), backend: 'codex' as const }
+    const harnessSession = { ...session('harness-1', false), backend: 'harness' as const }
+    const forkedHarness = { ...session('harness-forked', false), backend: 'harness' as const }
+    state.sessions = [codexSession, harnessSession]
+    state.workspaces = [
+      {
+        workspaceId: 'ws-codex',
+        title: 'Codex WS',
+        path: '/codex',
+        backend: 'codex' as const,
+        sessionIds: ['codex-1'],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+      {
+        workspaceId: 'ws-harness',
+        title: 'Harness WS',
+        path: '/harness',
+        backend: 'harness' as const,
+        sessionIds: ['harness-1'],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+    ]
+
+    proxy.sessionFork.mockResolvedValueOnce({ sessionId: 'harness-forked' })
+    proxy.sessionList.mockResolvedValueOnce([harnessSession, forkedHarness])
+    proxy.workspaceList.mockResolvedValueOnce({
+      items: [
+        {
+          workspaceId: 'ws-harness',
+          title: 'Harness WS',
+          path: '/harness',
+          backend: 'harness' as const,
+          sessionIds: ['harness-1', 'harness-forked'],
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+      archivedSessionIds: [],
+      pinnedSessionIds: [],
+    })
+
+    const result = await state.forkSession('harness-1')
+    expect(result?.sessionId).toBe('harness-forked')
+    expect(state.sessions).toContainEqual(codexSession)
+    expect(state.sessions).toContainEqual(forkedHarness)
+    expect(state.workspaces.some(w => w.workspaceId === 'ws-codex')).toBe(true)
+  })
+
+  it('refuses to pin or rename non-harness sessions without invoking host proxy', async () => {
+    const codexSession = { ...session('codex-1', false), backend: 'codex' as const }
+    state.sessions = [codexSession]
+
+    const pinOk = await state.pinSession('codex-1')
+    expect(pinOk).toBe(false)
+    expect(proxy.workspacePinSession).not.toHaveBeenCalled()
+
+    const renameOk = await state.renameSession('codex-1', 'New Title')
+    expect(renameOk).toBe(false)
+    expect(proxy.sessionRename).not.toHaveBeenCalled()
   })
 })

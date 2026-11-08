@@ -1,3 +1,4 @@
+import { renderBodyPortal } from './client/portal.js'
 import type { Translate } from './client-locale.js'
 import { en, localeNamespace, zh } from './client-locale.js'
 import { createRemoteSessionHeaderAction } from './client/header.js'
@@ -11,11 +12,14 @@ import type {
   ClientReact,
   ControlResult,
   FileViewerClientServiceLike,
+  PortalRenderer,
   RemoteConnectionProgress,
   RemoteDevice,
   RemoteStatus,
   RemoteWorkspaceSelection,
   SessionsClientServiceLike,
+  SidebarEntryPreference,
+  SidebarEntryStyle,
   UiWorkspaceClientServiceLike,
   WorkspacesClientServiceLike,
 } from './client/types.js'
@@ -85,10 +89,43 @@ window.__ModuleLoader__.load({
   factory: require => {
     const module = { exports: {} as Record<string, unknown> }
     const React = require('react') as ClientReact
+    // Share the host renderer for floating panels and the Compact sidebar entry.
+    const portal = (() => {
+      try {
+        const reactDom = require('react-dom') as { createPortal?: PortalRenderer }
+        return typeof reactDom.createPortal === 'function' ? reactDom.createPortal.bind(reactDom) : undefined
+      } catch {
+        return undefined
+      }
+    })()
     const RemotePluginOptions = createRemotePluginOptions(React)
-    const RemoteWorkspaceAction = createRemoteWorkspaceAction(React)
+    // Detail-page action beside the official Uninstall/Enable controls. The
+    // 0.2.2 bundle page renders the official README before the configuration
+    // section, so this jumps straight to the Remote card instead of requiring a
+    // scroll through the whole document.
+    function RemotePluginSettingsAction(props: { t: Translate; subject?: unknown }): unknown {
+      if (pluginSubjectPackageName(props.subject) !== 'ds-harness-remote') return null
+      const label = props.t('openPluginSettings')
+      return React.createElement('button', {
+        type: 'button',
+        className: 'dshRemoteDetailSettingsAction',
+        'aria-label': label,
+        onClick: (event: Event) => {
+          const button = event.currentTarget as Element | null
+          const page = button?.closest('[data-plugin-detail],[data-plugin-row-detail]') ?? document
+          const target = page.querySelector('[data-dsh-remote-settings]')
+          target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        },
+      }, label)
+    }
+    const RemoteWorkspaceAction = createRemoteWorkspaceAction(React, portal)
     const RemoteProgressView = createRemoteProgressView(React)
-    const RemoteSessionHeaderAction = createRemoteSessionHeaderAction(React)
+    const RemoteSessionHeaderAction = createRemoteSessionHeaderAction(React, portal)
+    let openHarnessSettings: ((page?: string) => void) | undefined
+    function RemoteSettingsLauncher(props: { openSettings?: (page?: string) => void }): unknown {
+      openHarnessSettings = props.openSettings
+      return null
+    }
     const inject = [
       'connection', 'slots', 'locale', 'workspaces', 'sessions',
     ]
@@ -127,7 +164,7 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         void refresh().catch(reason => {
-          setError(messageOf(reason))
+          setError(messageOf(reason, t))
           setSupported(false)
         })
       }, [])
@@ -161,7 +198,7 @@ window.__ModuleLoader__.load({
           }
           window.location.reload()
         } catch (reason) {
-          setError(messageOf(reason))
+          setError(messageOf(reason, t))
           setBusy(false)
         }
       }
@@ -174,7 +211,7 @@ window.__ModuleLoader__.load({
           await props.control('host.account.login', { email: email.trim(), password })
           await refreshStatus()
         } catch (reason) {
-          setError(messageOf(reason))
+          setError(messageOf(reason, t))
         } finally {
           setPassword('')
           setBusy(false)
@@ -190,7 +227,7 @@ window.__ModuleLoader__.load({
           setHostRegistrationCode('')
           await refreshStatus()
         } catch (reason) {
-          setError(messageOf(reason))
+          setError(messageOf(reason, t))
         } finally {
           setBusy(false)
         }
@@ -210,7 +247,7 @@ window.__ModuleLoader__.load({
         }, React.createElement('span', { 'aria-hidden': true }, '◎'), props.wide
           ? React.createElement('span', null, label)
           : null),
-        open ? React.createElement('div', { className: 'dshRemoteBackdrop', role: 'presentation' },
+        open ? renderBodyPortal(portal, React.createElement('div', { className: 'dshRemoteBackdrop', role: 'presentation', onMouseDown: (event: MouseEvent) => { if (event.target === event.currentTarget) setOpen(false) } },
           React.createElement('section', {
             className: 'dshRemoteDialog',
             role: 'dialog',
@@ -282,7 +319,7 @@ window.__ModuleLoader__.load({
                   onClick: () => void registerHostWithCode(),
                 }, t(busy ? 'registering' : 'useRegistrationCode'))) : null)
             : null,
-          error === undefined ? null : React.createElement('p', { className: 'dshRemoteError', role: 'alert' }, error)))
+          error === undefined ? null : React.createElement('p', { className: 'dshRemoteError', role: 'alert' }, error))))
           : null)
     }
 
@@ -320,6 +357,22 @@ window.__ModuleLoader__.load({
       const subscribeOpen = (listener: () => void): (() => void) => {
         remoteOpenListeners.add(listener)
         return () => { remoteOpenListeners.delete(listener) }
+      }
+      // Entry style shared by the settings page and the sidebar entry, so the
+      // toggle moves the entry without a reload.
+      let sidebarEntryStyle: SidebarEntryStyle = 'standard'
+      const sidebarEntryListeners = new Set<() => void>()
+      const sidebarEntry: SidebarEntryPreference = {
+        read: () => sidebarEntryStyle,
+        subscribe: (listener) => {
+          sidebarEntryListeners.add(listener)
+          return () => { sidebarEntryListeners.delete(listener) }
+        },
+        publish: (style) => {
+          if (style === sidebarEntryStyle) return
+          sidebarEntryStyle = style
+          for (const listener of sidebarEntryListeners) listener()
+        },
       }
       let controlRouteRetryAfter = 0
       let controlRouteBackoffIndex = 0
@@ -377,7 +430,7 @@ window.__ModuleLoader__.load({
           if (!workspacesReady(workspaceSnapshot)
             || !workspaceSnapshot.items.some(workspace => workspace.workspaceId === pending.workspaceId)) return
           const sessionSnapshot = ctx.sessions.list.getSnapshot()
-          const isVirtualBackend = pending.backend === 'codex' || pending.backend === 'cursor' || pending.backend === 'antigravity' || pending.backend === 'pi' || pending.backend === 'opencode' || pending.backend === 'claude'
+          const isVirtualBackend = pending.backend === 'codex' || pending.backend === 'cursor' || pending.backend === 'antigravity' || pending.backend === 'pi' || pending.backend === 'opencode' || pending.backend === 'claude' || pending.backend === 'hermes'
           if (isVirtualBackend && pending.sessionId !== undefined
             && sessionSnapshot.phase !== 'ready') return
 
@@ -466,6 +519,85 @@ window.__ModuleLoader__.load({
           }
         }, 'ds-harness-remote: remote file viewer provider')
       })
+      // Add Remote Hosts as an @ mention source through Harness' input-trigger
+      // service. The source owns only discovery and target switching; it never
+      // serializes a host into the prompt or writes session state.
+      const RemoteMentionIcon = (props: { size?: number; color?: string }): unknown => React.createElement('svg', {
+        width: props.size ?? 18,
+        height: props.size ?? 18,
+        viewBox: '0 0 24 24',
+        fill: 'none',
+        stroke: props.color ?? 'currentColor',
+        strokeWidth: 1.8,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        'aria-hidden': true,
+        className: 'dshRemoteComputerIcon',
+      }, React.createElement('rect', { x: 3, y: 4, width: 18, height: 13, rx: 2 }),
+        React.createElement('path', { d: 'M8 21h8M12 17v4' }))
+      ctx.inject(['inputTriggers'], inputContext => {
+        const hostCache = new Map<string, RemoteDevice>()
+        inputContext.effect(() => {
+          const inputTriggers = (inputContext as unknown as { inputTriggers: { registerSource(source: unknown): () => void } }).inputTriggers
+          const source = {
+            trigger: '@',
+            name: '主机',
+            order: -20,
+            showGroupTitle: true,
+            candidates: async (_session: unknown, request: { query: string; signal: AbortSignal }) => {
+              const settings = await control<{ config?: { remoteTools?: { enabled?: boolean } } }>('settings.get').catch(() => undefined)
+              // A missing/failed settings route is expected on older Hosts. Only
+              // an explicit disabled value should suppress the device candidates.
+              if (settings?.config?.remoteTools?.enabled === false) return []
+              const devices = await control<RemoteDevice[]>('devices').catch(() => [])
+              const query = request.query.trim().toLocaleLowerCase()
+              return devices
+                .filter(device => device.online && (query === '' || `${device.name} ${device.deviceId}`.toLocaleLowerCase().includes(query)))
+                .map(device => {
+                  hostCache.set(device.name, device)
+                  return {
+                  name: device.name,
+                  label: device.name,
+                  description: t('remoteHostMention', { platform: device.platform }),
+                  icon: RemoteMentionIcon,
+                  value: JSON.stringify({ deviceId: device.deviceId, label: device.name, platform: device.platform }),
+                  }
+                })
+            },
+            onPick: (pick: { candidate: { label?: string; name: string } }) => {
+              const label = pick.candidate.label ?? pick.candidate.name
+              return { text: `@${label} ` }
+            },
+          }
+          const stopHostFileOpen = (event: Event): void => {
+            const target = event.target instanceof Element
+              ? event.target.closest('button,[role=\"button\"],a') ?? event.target
+              : undefined
+            if (!(target instanceof Element)) return
+            const text = target.textContent?.trim().replace(/^@/, '') ?? ''
+            const device = hostCache.get(text)
+            if (!device) return
+            event.preventDefault()
+            event.stopImmediatePropagation()
+            let invocation = `@${device.name}`
+            let container: Element | null = target
+            for (let depth = 0; depth < 20 && container !== null; depth += 1) {
+              const candidate = container.textContent?.trim() ?? ''
+              if (candidate.includes(device.name) && candidate.length > invocation.length && candidate.length < 4000) invocation = candidate
+              container = container.parentElement
+            }
+            window.dispatchEvent(new CustomEvent('dsh-remote-host-reference', {
+              detail: { label: device.name, platform: device.platform, deviceId: device.deviceId, invocation },
+            }))
+          }
+          document.addEventListener('click', stopHostFileOpen, true)
+          const unregister = inputTriggers.registerSource(source)
+          return () => {
+            document.removeEventListener('click', stopHostFileOpen, true)
+            unregister()
+          }
+        }, 'ds-harness-remote: host mention source')
+      })
       ctx.effect(() => ctx.locale.register(localeNamespace, { zh, en }), 'ds-harness-remote: dictionaries')
       ctx.effect(() => installStyle(clientModuleId), 'ds-harness-remote: client styles')
       ctx.effect(() => installTerminalAvailabilityNotice(statusFeed, t), 'ds-harness-remote: terminal availability notice')
@@ -474,7 +606,7 @@ window.__ModuleLoader__.load({
         id: 'ds-harness-remote-global-context',
         order: 20,
         locale: localeNamespace,
-        inject: () => ({ control, statusFeed }),
+        inject: () => ({ control, statusFeed, onSignIn: openRemote }),
       }, RemoteSessionHeaderAction))
       ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
         name: 'sidebar.footer.action',
@@ -485,7 +617,10 @@ window.__ModuleLoader__.load({
           control,
           statusFeed,
           subscribeOpen,
+          openSettings: undefined,
           preferredQrProvider: ctx.locale.getLocale().active === 'zh' ? 'zhihu' : 'github',
+          sidebarEntry,
+          portal,
         }),
       }, RemoteWorkspaceAction))
       // rc.1 Plugins-page configuration surfaces. `plugins.item` is reserved
@@ -499,7 +634,13 @@ window.__ModuleLoader__.load({
         name: 'plugins.row.config',
         key: 'ds-harness-remote#ds-harness-remote',
         locale: localeNamespace,
-        inject: () => ({ control, statusFeed, onSignIn: openRemote }),
+        inject: () => ({
+          control,
+          statusFeed,
+          onSignIn: openRemote,
+          preferredQrProvider: ctx.locale.getLocale().active === 'zh' ? 'zhihu' : 'github',
+          sidebarEntry,
+        }),
       }, RemotePluginOptions))
       // Bundle-scoped: installed-bundle details resolve configuration by
       // package name.
@@ -507,8 +648,31 @@ window.__ModuleLoader__.load({
         name: 'plugins.bundle.config',
         key: 'ds-harness-remote',
         locale: localeNamespace,
-        inject: () => ({ control, statusFeed, onSignIn: openRemote }),
+        inject: () => ({
+          control,
+          statusFeed,
+          onSignIn: openRemote,
+          preferredQrProvider: ctx.locale.getLocale().active === 'zh' ? 'zhihu' : 'github',
+          sidebarEntry,
+        }),
       }, RemotePluginOptions))
+      // Top-of-page shortcut to the configuration card. Reused on a bundle's
+      // and a single row's page (the bundle's README moved the card far down).
+      ctx.slots.inject('plugins.detail.actions', () => ctx.slots.register({
+        name: 'plugins.detail.actions',
+        id: 'ds-harness-remote-settings-link',
+        order: 30,
+        locale: localeNamespace,
+        inject: () => ({}),
+      }, RemotePluginSettingsAction))
+    }
+
+    function pluginSubjectPackageName(subject: unknown): string | undefined {
+      if (typeof subject !== 'object' || subject === null) return undefined
+      const pkg = (subject as { pkg?: unknown }).pkg
+      if (typeof pkg !== 'object' || pkg === null) return undefined
+      const name = (pkg as { name?: unknown }).name
+      return typeof name === 'string' ? name : undefined
     }
 
     function isMissingControlRoute(reason: unknown): boolean {

@@ -21,9 +21,20 @@ export function resolveColorScheme(
 }
 
 export interface ThemeColors {
+  /** Page canvas behind cards and grouped lists. */
   background: string
+  /** Opaque sheets, inputs and the composer. */
   surface: string
+  /** White card fill; alpha applies only to the background, never its children. */
+  card: string
+  /** Card composited over the canvas, for swipe rows that must hide actions underneath. */
+  cardOpaque: string
+  /** Pills, pressed rows and other fills drawn on a surface. */
   surfaceStrong: string
+  /** Inset grouped lists (settings-style sections) drawn on the canvas. */
+  grouped: string
+  /** Floating header chips and other controls that hover over content. */
+  elevated: string
   ink: string
   muted: string
   subtle: string
@@ -32,6 +43,9 @@ export interface ThemeColors {
   primarySoft: string
   accent: string
   accentSoft: string
+  /** High-contrast fill for the main floating call to action (black in light, white in dark). */
+  inverse: string
+  onInverse: string
   success: string
   successSoft: string
   warning: string
@@ -48,58 +62,72 @@ export interface ThemeColors {
   shadow: string
 }
 
+// DeepSeek palette: ink #0F0F0F, DeepSeek blue (#4D6BFE) accents, white cards (#FFFFFF)
+// on a soft canvas (#F8F8F8) with #EDEDED hairline dividers and #59606D readable muted text.
 export const lightColors: ThemeColors = {
-  background: '#FFFFFF',
+  background: '#F8F8F8',
   surface: '#FFFFFF',
-  surfaceStrong: '#F0F2F5',
-  ink: '#1D1D1F',
-  muted: '#5F636B',
-  subtle: '#70757D',
-  primary: '#1677FF',
-  primaryPressed: '#0958D9',
-  primarySoft: '#E8F3FF',
-  accent: '#1677FF',
-  accentSoft: '#E8F3FF',
-  success: '#276A3C',
-  successSoft: '#E2F2E7',
-  warning: '#825306',
-  warningSoft: '#FAEDCC',
-  danger: '#A73A32',
-  dangerSoft: '#F9E5E2',
-  border: '#D9E2EC',
-  separator: '#E8E8ED',
-  disabled: '#A7ABB3',
+  card: '#FFFFFF',
+  cardOpaque: '#FFFFFF',
+  surfaceStrong: '#ECEFF4',
+  grouped: '#FFFFFF',
+  elevated: '#FFFFFF',
+  ink: '#0F0F0F',
+  muted: '#59606D',
+  subtle: '#B9B9BB',
+  primary: '#4D6BFE',
+  primaryPressed: '#3A56E6',
+  primarySoft: '#EBEFFF',
+  accent: '#4D6BFE',
+  accentSoft: '#EBEFFF',
+  inverse: '#0F0F0F',
+  onInverse: '#FFFFFF',
+  success: '#1E8449',
+  successSoft: '#E2F3E9',
+  warning: '#95600A',
+  warningSoft: '#FBEFD5',
+  danger: '#C2362F',
+  dangerSoft: '#FBE7E5',
+  border: '#EDEDED',
+  separator: '#EDEDED',
+  disabled: '#B3B9C4',
   white: '#FFFFFF',
-  scrim: 'rgba(23, 24, 29, 0.42)',
-  modalBackdrop: 'rgba(0, 0, 0, 0.45)',
-  menuDismiss: 'rgba(23, 24, 29, 0.16)',
-  shadow: '#000000',
+  scrim: 'rgba(15, 15, 15, 0.40)',
+  modalBackdrop: 'rgba(15, 15, 15, 0.42)',
+  menuDismiss: 'rgba(15, 15, 15, 0.14)',
+  shadow: '#1A2638',
 }
 
 export const darkColors: ThemeColors = {
-  background: '#0F1114',
-  surface: '#1A1D23',
-  surfaceStrong: '#252932',
-  ink: '#F2F3F5',
-  muted: '#9AA0A6',
-  subtle: '#7C828A',
-  primary: '#4096FF',
-  primaryPressed: '#1668DC',
-  primarySoft: '#111A2C',
-  accent: '#4096FF',
-  accentSoft: '#111A2C',
-  success: '#49AA6E',
-  successSoft: '#162312',
-  warning: '#D89614',
-  warningSoft: '#2B2111',
-  danger: '#E86E6B',
-  dangerSoft: '#2A1215',
-  border: '#3A4048',
-  separator: '#2E343C',
-  disabled: '#5F636B',
+  background: '#0B0D11',
+  surface: '#161A21',
+  card: 'rgba(255, 255, 255, 0.05)',
+  cardOpaque: '#17191D',
+  surfaceStrong: '#232832',
+  grouped: 'rgba(255, 255, 255, 0.05)',
+  elevated: '#1D222B',
+  ink: '#F2F4F7',
+  muted: '#A2A9B6',
+  subtle: '#7A8291',
+  primary: '#6F89FF',
+  primaryPressed: '#5672F5',
+  primarySoft: '#19213F',
+  accent: '#6F89FF',
+  accentSoft: '#19213F',
+  inverse: '#F2F4F7',
+  onInverse: '#0B0D11',
+  success: '#4CC07D',
+  successSoft: '#122A1D',
+  warning: '#E0A53A',
+  warningSoft: '#2C2312',
+  danger: '#F2736C',
+  dangerSoft: '#2E1618',
+  border: '#2B313C',
+  separator: '#252B35',
+  disabled: '#4E5562',
   white: '#FFFFFF',
-  scrim: 'rgba(0, 0, 0, 0.55)',
-  modalBackdrop: 'rgba(0, 0, 0, 0.6)',
+  scrim: 'rgba(0, 0, 0, 0.58)',
+  modalBackdrop: 'rgba(0, 0, 0, 0.62)',
   menuDismiss: 'rgba(0, 0, 0, 0.45)',
   shadow: '#000000',
 }
@@ -123,8 +151,30 @@ export const radius = {
   sm: 8,
   md: 12,
   lg: 16,
+  /** Grouped lists, cards and sheets. */
+  xl: 22,
+  /** The composer and other large floating surfaces. */
+  xxl: 28,
   pill: 999,
 } as const
+
+/** Soft lift for floating controls (header chips, cards, composer). */
+export function floatingShadow(colors: { shadow: string }, strength: 'low' | 'high' = 'low') {
+  return strength === 'high'
+    ? { shadowColor: colors.shadow, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.12, shadowRadius: 16, elevation: 6 }
+    : { shadowColor: colors.shadow, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8, elevation: 2 }
+}
+
+/** Soft brand glow for prominent floating call-to-action pills (e.g. create session). */
+export function brandGlowShadow(colors: { primary: string; shadow: string }) {
+  return {
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 14,
+    elevation: 4,
+  }
+}
 
 export const standardType = {
   hero: { fontSize: 32, lineHeight: 38, fontWeight: '700' as const, letterSpacing: -0.6, includeFontPadding: false },

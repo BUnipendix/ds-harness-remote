@@ -34,6 +34,7 @@ class LoopbackTransport extends BaseTransport {
 
 const cleanupContract1 = () => {
   vi.useRealTimers()
+  vi.restoreAllMocks()
 }
 afterEach(cleanupContract1)
 
@@ -82,6 +83,10 @@ describe('RemoteClientCore', () => {
               code: 'TRANSPORT_CLOSED',
             })
             expect(closed).toBe(true)
+            await expect(client.rpc('harness.remote.stream.close', {})).rejects.toMatchObject({ code: 'TRANSPORT_CLOSED' })
+            await client.close()
+            await expect(client.rpc('harness.remote.stream.close', {})).rejects.toMatchObject({ code: 'TRANSPORT_CLOSED' })
+            expect(transport.sent).toHaveLength(1)
           },
         },
         {
@@ -98,6 +103,8 @@ describe('RemoteClientCore', () => {
               name: 'RemoteClientError',
               code: 'CLIENT_CLOSED',
             })
+            await expect(client.rpc('harness.remote.stream.close', {})).rejects.toMatchObject({ code: 'CLIENT_CLOSED' })
+            expect(transport.sent).toHaveLength(1)
           },
         },
         {
@@ -469,10 +476,13 @@ describe('RemoteTypertGateway', () => {
     expect(Array.from((result as { ok: true; value: { data: Uint8Array } }).value.data)).toEqual([0, 255, 16])
   })
 
-  it('keeps a per-call deadline across the bounded transfer retry and bounds the cleanup close', async () => {
+  it('keeps a transfer deadline across upload and commit and bounds the cleanup close', async () => {
+    let now = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
     const calls: Array<{ method: string; options?: unknown }> = []
     const rpc = vi.fn(async (method: string, _params: unknown, _signal?: unknown, options?: unknown) => {
       calls.push({ method, options })
+      now += 1_000
       if (method === 'harness.remote.call') throw Object.assign(new Error('too large'), { code: 'RESPONSE_TOO_LARGE' })
       if (method === 'harness.remote.transfer.commit') return { kind: 'inline', response: { ok: true, value: 'converted' } }
       if (method === 'harness.remote.transfer.close') return { closed: true }
@@ -496,13 +506,75 @@ describe('RemoteTypertGateway', () => {
     ])
     expect(calls.slice(0, 4).map(call => call.options)).toEqual([
       { timeoutMs: 120_000 },
-      { timeoutMs: 120_000 },
-      { timeoutMs: 120_000 },
-      { timeoutMs: 120_000 },
+      { timeoutMs: 30_000 },
+      { timeoutMs: 30_000 },
+      { timeoutMs: 118_000 },
     ])
     const cleanup = calls[4]?.options as { timeoutMs: number } | undefined
     expect(cleanup?.timeoutMs).toBeGreaterThan(0)
     expect(cleanup?.timeoutMs).toBeLessThanOrEqual(5_000)
+  })
+
+  it('enforces one transfer deadline and integer per-step timeouts', async () => {
+    await runScenarios([
+      { name: 'default deadline before commit', options: undefined, elapsed: 60_000, rejectedStep: 'commit' },
+      { name: 'explicit deadline before upload', options: { timeoutMs: 1_000 }, elapsed: 1_000, rejectedStep: 'chunk:0' },
+      { name: 'chunk cap without an overall override', options: { chunkTimeoutMs: 50 }, elapsed: 0, rejectedStep: undefined },
+    ].map(({ name, options, elapsed, rejectedStep }) => ({ name, run: async () => {
+      let now = 0
+      vi.spyOn(performance, 'now').mockImplementation(() => now)
+      const calls: Array<{ method: string; timeoutMs?: number }> = []
+      const rpc = vi.fn(async (method: string, _params: unknown, _signal?: unknown, opts?: { timeoutMs?: number }) => {
+        calls.push({ method, timeoutMs: opts?.timeoutMs })
+        if (method === 'harness.remote.call') throw Object.assign(new Error('too large'), { code: 'RESPONSE_TOO_LARGE' })
+        if (method === 'harness.remote.transfer.open') now += Math.min(elapsed, 1_000)
+        if (method === 'harness.remote.transfer.chunk') now += Math.max(0, elapsed - 1_000)
+        if (method === 'harness.remote.transfer.commit') return { kind: 'inline', response: { ok: true, value: 'done' } }
+        return { accepted: true }
+      })
+      const call = new RemoteTypertGateway({ rpc } as unknown as RemoteClientCore).call('session/list', {}, undefined, options)
+      if (rejectedStep) {
+        await expect(call).rejects.toMatchObject({ code: 'RPC_TIMEOUT', details: { step: rejectedStep } })
+        expect(calls.some(call => call.method === `harness.remote.transfer.${rejectedStep.split(':')[0]}`)).toBe(false)
+      } else {
+        await expect(call).resolves.toBe('done')
+        expect(calls.find(call => call.method.endsWith('.chunk'))?.timeoutMs).toBe(50)
+      }
+      expect(calls.at(-1)?.method).toBe('harness.remote.transfer.close')
+      vi.restoreAllMocks()
+    } })))
+
+    // Exercise RemoteClientCore's real timer validation: fractional durations
+    // would silently fall back to its 30s default, exceeding this deadline.
+    vi.useFakeTimers()
+    let now = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const transport = new LoopbackTransport()
+    const client = new RemoteClientCore(transport)
+    await client.connect()
+    const call = new RemoteTypertGateway(client).call('session/list', {}, undefined, { timeoutMs: 1_000 })
+    const failure = expect(call).rejects.toMatchObject({ code: 'RPC_TIMEOUT' })
+    const answer = (index: number, value: unknown) => {
+      const request = JSON.parse(new TextDecoder().decode(transport.sent[index]!))
+      transport.push(encodeMessage(createRpcResponse(request.id, value)))
+    }
+    const direct = JSON.parse(new TextDecoder().decode(transport.sent[0]!))
+    transport.push(encodeMessage(createRpcError(direct.id, 'RESPONSE_TOO_LARGE', 'too large')))
+    await vi.advanceTimersByTimeAsync(0)
+    answer(1, { opened: true })
+    await vi.advanceTimersByTimeAsync(0)
+    answer(2, { accepted: true })
+    await vi.advanceTimersByTimeAsync(0)
+    now = 700.25
+    const open = JSON.parse(new TextDecoder().decode(transport.sent[1]!))
+    answer(3, { kind: 'chunked', transferId: open.payload.params.transferId, totalBytes: 100, totalChunks: 1 })
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(299)
+    const close = JSON.parse(new TextDecoder().decode(transport.sent.at(-1)!))
+    expect(close.payload.method).toBe('harness.remote.transfer.close')
+    answer(5, { closed: true })
+    await failure
+    await client.close()
   })
 
   it('does not replay a cancelled transferred call and releases the caller once the close is bounded', async () => {
@@ -653,6 +725,92 @@ describe('RemoteTypertGateway', () => {
               new RemoteTypertGateway(client).call('officeToPdf/render', { args: {} }),
             ).rejects.toMatchObject({ code: 'INVALID_MESSAGE' })
             expect(methods).not.toContain('harness.remote.transfer.read')
+          },
+        },
+        {
+          name: 'fails with RPC_TIMEOUT when a chunk read times out',
+          run: async () => {
+            let transferId = ''
+            const rpc = vi.fn(async (method: string, params: unknown) => {
+              if (method === 'harness.remote.call')
+                throw Object.assign(new Error('too large'), { code: 'RESPONSE_TOO_LARGE' })
+              if (method === 'harness.remote.transfer.open') {
+                transferId = (params as { transferId: string }).transferId
+                return { opened: true }
+              }
+              if (method === 'harness.remote.transfer.commit') {
+                return { kind: 'chunked', transferId: (params as { transferId: string }).transferId, totalBytes: 100, totalChunks: 1 }
+              }
+              if (method === 'harness.remote.transfer.read') {
+                throw Object.assign(new Error('RPC timed out'), { code: 'RPC_TIMEOUT' })
+              }
+              return { accepted: true }
+            })
+            const client = { rpc } as unknown as RemoteClientCore
+
+            await expect(
+              new RemoteTypertGateway(client).call('officeToPdf/render', { args: {} }, undefined, {
+                chunkTimeoutMs: 5_000,
+              }),
+            ).rejects.toMatchObject({
+              code: 'RPC_TIMEOUT',
+              details: expect.objectContaining({
+                transferId: expect.any(String),
+                index: 0,
+                totalChunks: 1,
+              }),
+            })
+          },
+        },
+        {
+          name: 'fails with TRANSFER_FAILED when a chunk read encounters a network error',
+          run: async () => {
+            let transferId = ''
+            const rpc = vi.fn(async (method: string, params: unknown) => {
+              if (method === 'harness.remote.call')
+                throw Object.assign(new Error('too large'), { code: 'RESPONSE_TOO_LARGE' })
+              if (method === 'harness.remote.transfer.open') {
+                transferId = (params as { transferId: string }).transferId
+                return { opened: true }
+              }
+              if (method === 'harness.remote.transfer.commit') {
+                return { kind: 'chunked', transferId: (params as { transferId: string }).transferId, totalBytes: 100, totalChunks: 1 }
+              }
+              if (method === 'harness.remote.transfer.read') {
+                throw new Error('Connection reset by peer')
+              }
+              return { accepted: true }
+            })
+            const client = { rpc } as unknown as RemoteClientCore
+
+            await expect(
+              new RemoteTypertGateway(client).call('officeToPdf/render', { args: {} }),
+            ).rejects.toMatchObject({
+              code: 'TRANSFER_FAILED',
+              details: expect.objectContaining({
+                index: 0,
+                totalChunks: 1,
+              }),
+            })
+          },
+        },
+        {
+          name: 'rejects invalid transfer timeout options',
+          run: async () => {
+            const rpc = vi.fn(async (method: string) => {
+              if (method === 'harness.remote.call')
+                throw Object.assign(new Error('too large'), { code: 'RESPONSE_TOO_LARGE' })
+              return { opened: true }
+            })
+            const client = { rpc } as unknown as RemoteClientCore
+
+            for (const field of ['timeoutMs', 'chunkTimeoutMs'] as const) {
+              for (const value of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648]) {
+                await expect(
+                  new RemoteTypertGateway(client).call('officeToPdf/render', { args: {} }, undefined, { [field]: value }),
+                ).rejects.toMatchObject({ code: 'INVALID_MESSAGE' })
+              }
+            }
           },
         },
       ],
@@ -1044,5 +1202,39 @@ describe('HarnessAlphaClient', () => {
       },
     }))
     await client.close()
+  })
+})
+
+
+describe('HarnessAlphaClient.sessionAttachment', () => {
+  const data = 'iVBORw0KGgo='
+  const makeCore = () => ({
+    rpc: vi.fn(async (method: string, params: any) => {
+      if (method === 'harness.remote.call' && params?.endpoint === 'session/attachment') {
+        return { ok: true, value: { attachment: { mediaType: 'image/png' }, data } }
+      }
+      return { ok: true, value: {} }
+    }),
+  })
+  const requestOf = (core: ReturnType<typeof makeCore>) => {
+    const call = core.rpc.mock.calls.find(([method, params]) =>
+      method === 'harness.remote.call' && params?.endpoint === 'session/attachment')
+    return call?.[1]?.payload?.args?.request
+  }
+
+  it('keeps the id-only request for a string attachmentId', async () => {
+    const core = makeCore()
+    const client = new HarnessAlphaClient(core as any)
+    await client.sessionAttachment('s1', 'att-1')
+    expect(requestOf(core)).toEqual({ sessionId: 's1', attachmentId: 'att-1' })
+  })
+
+  it('keeps both attachment and attachmentId for a full reference', async () => {
+    const core = makeCore()
+    const client = new HarnessAlphaClient(core as any)
+    const reference = { attachmentId: 'att-1', mediaType: 'image/png', bytes: 8, width: 4, height: 2, name: 'a.png' }
+    const result = await client.sessionAttachment('s1', reference)
+    expect(result.data).toBe(data)
+    expect(requestOf(core)).toEqual({ sessionId: 's1', attachmentId: 'att-1', attachment: reference })
   })
 })

@@ -9,6 +9,28 @@ import {
 } from '../src/codex-client.js'
 
 describe('Codex display projection', () => {
+  it('keeps the first user message as an untitled thread preview across live updates and history reads', () => {
+    const user = { id: 'u1', type: 'userMessage', content: [{ type: 'text', text: '  Check\n the latest PR  ' }] }
+    const initial = createCodexTimelineState({ id: 'untitled', turns: [] })!
+    const started = reduceCodexTimelineFrame(initial, {
+      method: 'item/started', params: { turnId: 't1', item: user },
+    })
+    expect(started.session).toMatchObject({ preview: 'Check the latest PR' })
+    expect(started.session.title).toBeUndefined()
+    const later = reduceCodexTimelineFrame(started, {
+      method: 'item/completed', params: { turnId: 't2', item: { ...user, id: 'u2', content: [{ type: 'text', text: 'Second prompt' }] } },
+    })
+    expect(later.session.preview).toBe('Check the latest PR')
+    const renamed = reduceCodexTimelineFrame(later, {
+      method: 'thread/name/updated', params: { threadName: 'PR review' },
+    })
+    expect(renamed.session.title).toBe('PR review')
+    expect(projectCodexThread({ id: 'untitled', turns: [{ id: 't1', items: [user] }] })?.preview).toBe('Check the latest PR')
+    expect(projectCodexThread({ id: 'untitled', preview: 'Server preview', turns: [{ id: 't1', items: [user] }] })?.preview).toBe('Server preview')
+    const imageOnly = createCodexTimelineState({ id: 'image', turns: [{ id: 't1', items: [{ id: 'u1', type: 'userMessage', content: [{ type: 'image', url: 'data:image/png;base64,aA==' }] }] }] })!
+    expect(imageOnly.session.preview).toBeUndefined()
+  })
+
   it('uses the bounded Codex transfer path for image prompt input', async () => {
     const rpc = vi.fn(async (method: string) => {
       if (method === 'codex.app.transfer.commit') return { kind: 'inline', response: { turn: { id: 'turn_1' } } }
@@ -51,6 +73,17 @@ describe('Codex display projection', () => {
       status: 'waiting',
       pinned: true,
     })
+  })
+
+  it('projects the current model from the latest CodeX Turn', () => {
+    expect(projectCodexThread({
+      id: 'thr_model',
+      model: 'stale-model',
+      turns: [
+        { id: 'turn_old', model: 'old-model', reasoningEffort: 'low' },
+        { id: 'turn_new', model: 'gpt-5.6-terra', effort: 'high' },
+      ],
+    })).toMatchObject({ model: 'gpt-5.6-terra', reasoningEffort: 'high' })
   })
 
   it('derives deterministic fallback workspaces from unique Thread cwd values', () => {
@@ -233,6 +266,38 @@ describe('Codex display projection', () => {
     expect(state.approval).toBeUndefined()
     expect(state.session.status).toBe('idle')
     expect(state.items[0]).toMatchObject({ text: 'Hello world.', status: 'completed' })
+  })
+
+  it('clears an active turn when the App Server reports an idle or system error status', () => {
+    let state = createCodexTimelineState({
+      id: 'thr_status', cwd: '/workspace/repo', createdAt: 1, updatedAt: 2,
+      status: { type: 'idle' }, turns: [],
+    })!
+    state = reduceCodexTimelineFrame(state, {
+      method: 'turn/started',
+      params: { turn: { id: 'turn_status', status: 'inProgress', items: [] } },
+    })
+    expect(state.activeTurnId).toBe('turn_status')
+
+    state = reduceCodexTimelineFrame(state, {
+      method: 'thread/status/changed',
+      params: { status: { type: 'idle' } },
+    })
+    expect(state).toMatchObject({ session: { status: 'idle' } })
+    expect(state.activeTurnId).toBeUndefined()
+    expect(state.items.every(item => item.status !== 'running')).toBe(true)
+
+    state = reduceCodexTimelineFrame(state, {
+      method: 'turn/started',
+      params: { turn: { id: 'turn_error', status: 'inProgress', items: [] } },
+    })
+    state = reduceCodexTimelineFrame(state, {
+      method: 'thread/status/changed',
+      params: { status: { type: 'systemError' } },
+    })
+    expect(state).toMatchObject({ session: { status: 'failed' } })
+    expect(state.activeTurnId).toBeUndefined()
+    expect(state.items.every(item => item.status !== 'running')).toBe(true)
   })
 
   it('merges command, file-change, and approval-resolution notifications by native item id', () => {

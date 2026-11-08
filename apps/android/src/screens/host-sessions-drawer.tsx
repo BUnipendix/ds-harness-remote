@@ -3,7 +3,10 @@ import {
   Alert,
   ActivityIndicator,
   Animated,
+  Keyboard,
+  KeyboardAvoidingView,
   PanResponder,
+  Platform,
   TextInput,
   SectionList,
   ScrollView,
@@ -15,39 +18,66 @@ import {
   useWindowDimensions,
 } from 'react-native'
 import * as Haptics from 'expo-haptics'
+import * as Clipboard from 'expo-clipboard'
 import {
   ArrowLeft,
+  Bot,
   Check,
   ChevronDown,
   ChevronRight,
+  ChevronsUpDown,
   Clock,
   Puzzle,
   Folder,
   FolderOpen,
   FolderPlus,
-  PlusCircle,
+  Laptop,
+  LayoutGrid,
+  Monitor,
+  MoreHorizontal,
+  Plus,
   RefreshCw,
   Search,
+  Server,
+  Settings,
   Sliders,
+  Star,
+  Users,
+  X,
 } from 'lucide-react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAppStore } from '../state/store'
+import { isKnownBotSessionId, useBotTeamStore } from '../state/bot-store'
 import type { AgentBackend, RemoteSession, WorkspaceView } from '../types'
 import { strings } from '../locales/i18n'
-import { radius, spacing, type } from '../ui/theme'
+import { GroupCard, GroupRow, IconButton, SectionTitle } from '../ui/components'
+import { floatingShadow, radius, spacing, type } from '../ui/theme'
 import { useTheme, type ThemeColors } from '../ui/theme-context'
 import { useThemedStyles } from '../ui/use-themed-styles'
 import { resolveSessionDisplayTitle } from './session-title'
+import { OfficialMenuIcons } from '../ui/official-menu-icons'
 import { browseStatus } from '../lib/backend-groups'
-import { loadHostSessionsDrawerGroups, saveHostSessionsDrawerGroup } from '../services/storage'
+import { browseScope, saveHostMode, useBrowseMemory } from '../services/browse-memory'
+import {
+  loadHostSessionsDrawerGroups,
+  saveHostSessionsDrawerGroup,
+  saveWorkspaceBackend,
+} from '../services/storage'
 import { clampDrawerTranslate, shouldConfirmSwipeLeftClose, shouldStartSwipeLeftToClose } from '../lib/gesture-swipe-rules'
+import { buildTreeSections, applyManualOrder, reorderSessionIds } from '../lib/workspace-tree'
+import { BotModalsHost, BotSidebarSection, useBotTeamPolling } from './bot-sidebar-section'
+import { CreateWorkspaceModal, RenameWorkspaceModal, WorkspaceActionsModal } from './workspace-modals'
 
 const SESSION_PAGE_SIZE = 3
+const DRAWER_WIDTH_RATIO = 1
 
 /** 浮窗相对工具栏底部的间距 */
 const POPOVER_OFFSET = 4
 /** 浮窗到容器右边缘的距离（与工具栏 paddingHorizontal 对齐） */
 const POPOVER_RIGHT_INSET = spacing.md
+
+/** 内存缓存每台设备的工作区展开状态，关闭/重开侧边栏或切换模式时保持上次离开状态 */
+const memoryGroupsByDevice: Record<string, Record<string, boolean>> = {}
 
 function formatRelativeTime(timestamp?: number | string): string {
   if (!timestamp) return ''
@@ -62,43 +92,170 @@ function formatRelativeTime(timestamp?: number | string): string {
   return `${days}d`
 }
 
+interface DrawerSection {
+  id: string
+  title: string
+  total: number
+  expanded: boolean
+  data: RemoteSession[]
+  depth?: number
+  workspaceId?: string
+  hasMoreFooter?: boolean
+}
+
+interface HarnessOption {
+  value: AgentBackend
+  name: string
+  desc: string
+}
+
+const HARNESS_OPTIONS: HarnessOption[] = [
+  { value: 'harness', name: 'DeepSeek Harness', desc: '官方 DeepSeek 智能体框架' },
+  { value: 'codex', name: 'Codex', desc: 'OpenAI Codex 编程智能体' },
+  { value: 'claude', name: 'Claude', desc: 'Anthropic Claude 智能体' },
+  { value: 'hermes', name: 'Hermes', desc: 'Nous Research Hermes Agent 智能体' },
+  { value: 'cursor', name: 'Cursor', desc: 'Cursor IDE 交互智能体' },
+  { value: 'antigravity', name: 'Antigravity', desc: 'Antigravity 研发框架' },
+  { value: 'opencode', name: 'OpenCode', desc: 'OpenCode 开源智能体' },
+  { value: 'pi', name: 'Pi', desc: 'Personal Intelligence 智能体' },
+]
+
+function harnessDisplayName(value: AgentBackend): string {
+  switch (value) {
+    case 'harness': return 'DeepSeek'
+    case 'codex': return 'Codex'
+    case 'claude': return 'Claude'
+    case 'hermes': return 'Hermes'
+    case 'cursor': return 'Cursor'
+    case 'antigravity': return 'Antigravity'
+    case 'opencode': return 'OpenCode'
+    case 'pi': return 'Pi'
+    default: return value
+  }
+}
+
 export function HostSessionsDrawer({
   onBack,
   onClose,
   onOpenWorkspaces,
+  onOpenDeviceInfo,
   onSelect,
+  onNewSession: _onNewSession,
   onOpenAutomationTasks,
   onOpenPlugins,
+  onOpenHostSwitcher,
+  onOpenSettings,
+  botMode,
+  onBotModeChange,
+  onSelectBot,
   inline = false,
   backLabel,
+  dismissible = true,
 }: {
-  onBack: () => void
+  onBack?: () => void
   onClose: () => void
-  onOpenWorkspaces: () => void
+  onOpenWorkspaces?: () => void
+  onOpenDeviceInfo?: () => void
   onSelect: (session: RemoteSession) => Promise<void>
+  onNewSession?: () => Promise<void> | void
   onOpenAutomationTasks?: () => void
   onOpenPlugins?: () => void
+  onOpenHostSwitcher?: () => void
+  onOpenSettings?: () => void
+  botMode?: boolean
+  onBotModeChange?: (botMode: boolean) => void
+  onSelectBot?: (botId: string) => void
   inline?: boolean
   backLabel?: string
+  /** 冷启动停留在侧边栏且尚未选择任何页面时，禁止手势/返回键把侧边栏划走。 */
+  dismissible?: boolean
 }) {
   const language = useAppStore(state => state.language)
   const deviceId = useAppStore(state => state.selectedDevice?.deviceId)
   const deviceName = useAppStore(state => state.selectedDevice?.name)
+  const platform = useAppStore(state => state.selectedDevice?.platform)
+  const connectionPhase = useAppStore(state => state.connection.phase)
   const sessions = useAppStore(state => state.sessions)
   const recentIds = useAppStore(state => state.currentWorkSessionIds)
+  const codexAvailable = useAppStore(state => state.codexAvailable)
+  const cursorAvailable = useAppStore(state => state.cursorAvailable)
+  const antigravityAvailable = useAppStore(state => state.antigravityAvailable)
+  const piAvailable = useAppStore(state => state.piAvailable)
+  const opencodeAvailable = useAppStore(state => state.opencodeAvailable)
+  const claudeAvailable = useAppStore(state => state.claudeAvailable)
+  const hermesAvailable = useAppStore(state => state.hermesAvailable)
   const availableBackends = useAppStore(state => [
     'harness', state.codexAvailable && 'codex', state.cursorAvailable && 'cursor',
     state.antigravityAvailable && 'antigravity', state.piAvailable && 'pi',
     state.opencodeAvailable && 'opencode', state.claudeAvailable && 'claude',
+    state.hermesAvailable && 'hermes',
   ].filter(Boolean).join(','))
   const lifecycles = useAppStore(state => state.sessionLifecycles)
   const selected = useAppStore(state => state.selectedSession)
   const archivedIds = useAppStore(state => state.archivedSessionIds)
+  const pinnedSessionIds = useAppStore(state => state.pinnedSessionIds)
   const workspaces = useAppStore(state => state.workspaces)
+  const favoriteWorkspaces = useAppStore(state => state.favoriteWorkspaces)
+  const toggleFavoriteWorkspace = useAppStore(state => state.toggleFavoriteWorkspace)
+  const removeFavoriteWorkspace = useAppStore(state => state.removeFavoriteWorkspace)
+  const createWorkspace = useAppStore(state => state.workspaceCreate)
+  const renameWorkspace = useAppStore(state => state.workspaceRename)
+  const moveWorkspace = useAppStore(state => state.workspaceMove)
+  const deleteWorkspace = useAppStore(state => state.workspaceDelete)
   const busy = useAppStore(state => state.busyAction)
   const connected = useAppStore(state => state.connection.phase === 'connected')
   const refreshWorkspaces = useAppStore(state => state.refreshWorkspaces)
   const createSession = useAppStore(state => state.createSession)
+  const pinSession = useAppStore(state => state.pinSession)
+  const unpinSession = useAppStore(state => state.unpinSession)
+  const renameSession = useAppStore(state => state.renameSession)
+  const forkSession = useAppStore(state => state.forkSession)
+  const archiveSession = useAppStore(state => state.archiveSession)
+  const unarchiveSession = useAppStore(state => state.unarchiveSession)
+
+  const hostScope = useAppStore(browseScope)
+  const persistedBotMode = useBrowseMemory(state => state.hostModes[hostScope] === 'bot')
+  const activeBotMode = botMode ?? persistedBotMode
+  const [drawerMode, setDrawerMode] = useState<'agent' | 'bot'>(activeBotMode ? 'bot' : 'agent')
+
+  useEffect(() => {
+    setDrawerMode(activeBotMode ? 'bot' : 'agent')
+  }, [activeBotMode, hostScope])
+
+  useBotTeamPolling(drawerMode === 'bot')
+
+  const handleSwitchMode = (nextMode: 'agent' | 'bot') => {
+    setDrawerMode(nextMode)
+    saveHostMode(hostScope, nextMode)
+    onBotModeChange?.(nextMode === 'bot')
+  }
+
+  const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false)
+  const [workspaceActionTarget, setWorkspaceActionTarget] = useState<WorkspaceView | undefined>(undefined)
+  const [renameWorkspaceTarget, setRenameWorkspaceTarget] = useState<WorkspaceView | undefined>(undefined)
+  const [showBotSearch, setShowBotSearch] = useState(false)
+  const [botSearchQuery, setBotSearchQuery] = useState('')
+
+  const [menuSession, setMenuSession] = useState<RemoteSession | null>(null)
+  const [renameTarget, setRenameTarget] = useState<{ sessionId: string; currentTitle: string; backend?: RemoteSession['backend'] } | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
+  const [renameError, setRenameError] = useState<string | null>(null)
+  const [renaming, setRenaming] = useState(false)
+  const [toastMessage, setToastMessage] = useState<string | null>(null)
+
+  const menuBackend = menuSession?.backend ?? 'harness'
+  const canUseHarnessActions = !!menuSession && menuBackend === 'harness'
+  const menuIsPinned = !!menuSession && canUseHarnessActions && pinnedSessionIds.includes(menuSession.sessionId)
+  const menuIsArchived = !!menuSession && canUseHarnessActions && archivedIds.includes(menuSession.sessionId)
+
+  const closeDrawer = () => {
+    setMenuSession(null)
+    setRenameTarget(null)
+    setRenameError(null)
+    setRenaming(false)
+    setToastMessage(null)
+    onClose()
+  }
 
   const [backend, setBackend] = useState<AgentBackend>(selected?.backend ?? useAppStore.getState().workspaceCatalog?.backend ?? 'harness')
   const backends = [...new Set<AgentBackend>([
@@ -115,34 +272,114 @@ export function HostSessionsDrawer({
     if (connected) void refreshWorkspaces(backend)
   }, [backend, connected, deviceId, refreshWorkspaces])
 
+  const [harnessPickerOpen, setHarnessPickerOpen] = useState(false)
+  const windowDimensions = useWindowDimensions()
+  const sheetMaxHeight = Math.min(windowDimensions.height * 0.75, 520)
+
+  const isBackendAvailable = (target: AgentBackend) => {
+    switch (target) {
+      case 'harness': return true
+      case 'codex': return useAppStore.getState().codexAvailable
+      case 'cursor': return useAppStore.getState().cursorAvailable
+      case 'antigravity': return useAppStore.getState().antigravityAvailable
+      case 'pi': return useAppStore.getState().piAvailable
+      case 'opencode': return useAppStore.getState().opencodeAvailable
+      case 'claude': return useAppStore.getState().claudeAvailable
+      case 'hermes': return useAppStore.getState().hermesAvailable
+      default: return false
+    }
+  }
+
+  const handleSelectHarness = async (target: AgentBackend) => {
+    setHarnessPickerOpen(false)
+    if (!isBackendAvailable(target)) {
+      Alert.alert(
+        strings.common.unavailable ?? '平台未启用',
+        `当前连接的主机未启用 ${harnessDisplayName(target)} 服务，请在电脑端配置或启动该智能体。`,
+      )
+      return
+    }
+
+    if (target === backend && selected && (selected.backend ?? 'harness') === target) {
+      closeDrawer()
+      return
+    }
+
+    let success = false
+    const targetSessions = sessions.filter(s => (s.backend ?? 'harness') === target && !archivedIds.includes(s.sessionId))
+    if (targetSessions.length > 0) {
+      const latest = [...targetSessions].sort((a, b) => b.updatedAt - a.updatedAt)[0]
+      if (latest) {
+        await onSelect(latest)
+        success = true
+      }
+    } else {
+      const targetWs = workspaces.find(w => (w.backend ?? 'harness') === target)?.workspaceId
+      success = await createSession(targetWs, target)
+    }
+
+    if (success) {
+      setBackend(target)
+      if (deviceId !== undefined) {
+        void saveWorkspaceBackend(deviceId, target)
+      }
+      if (connected) {
+        void refreshWorkspaces(target)
+      }
+      closeDrawer()
+    } else {
+      Alert.alert(
+        strings.common.unavailable ?? '切换失败',
+        `无法切换到 ${harnessDisplayName(target)} 对话，请稍后重试。`,
+      )
+    }
+  }
+
   const [refreshing, setRefreshing] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [showConfigModal, setShowConfigModal] = useState(false)
-  const [groupBy, setGroupBy] = useState<'workspace' | 'list'>('workspace')
+  const [groupBy, setGroupBy] = useState<'workspace' | 'workspace-tree' | 'list'>('workspace')
   const [orderBy, setOrderBy] = useState<'manual' | 'updated'>('updated')
+  const [manualOrders, setManualOrders] = useState<Record<string, string[]>>({})
+  const [dragState, setDragState] = useState<{
+    sessionId: string
+    sectionId: string
+    accountKey: string
+    fromIndex: number
+    overIndex: number
+    isPinned: boolean
+  } | null>(null)
+  const touchStartY = useRef(0)
+  const dragActiveRef = useRef(false)
+  const justDraggedRef = useRef(false)
   const [filterMode, setFilterMode] = useState<'hideArchived' | 'all' | 'archivedOnly'>('hideArchived')
-  const [groupsByDevice, setGroupsByDevice] = useState<Record<string, Record<string, boolean>>>({})
-  const [loadedDeviceId, setLoadedDeviceId] = useState<string>()
+  const groupScopeKey = deviceId ? `${hostScope}:${deviceId}` : undefined
+  const [groupsByDevice, setGroupsByDevice] = useState<Record<string, Record<string, boolean>>>(() => ({ ...memoryGroupsByDevice }))
+  const [loadedDeviceId, setLoadedDeviceId] = useState<string | undefined>(() => (groupScopeKey && memoryGroupsByDevice[groupScopeKey] ? deviceId : undefined))
   const [groupStorageError, setGroupStorageError] = useState<string>()
   const groupsReady = deviceId === undefined || loadedDeviceId === deviceId
-  const expandedWorkspaces = deviceId === undefined ? {} : groupsByDevice[deviceId] ?? {}
+  const expandedWorkspaces = groupScopeKey === undefined ? {} : groupsByDevice[groupScopeKey] ?? {}
   useEffect(() => {
-    if (deviceId === undefined) return
+    if (deviceId === undefined || groupScopeKey === undefined) return
     let cancelled = false
-    setLoadedDeviceId(undefined)
+    if (!memoryGroupsByDevice[groupScopeKey]) setLoadedDeviceId(undefined)
     setGroupStorageError(undefined)
     void loadHostSessionsDrawerGroups(deviceId).then(saved => {
-      if (!cancelled) setGroupsByDevice(current => ({
-        ...current, [deviceId]: { ...saved, ...current[deviceId] },
-      }))
+      if (!cancelled) {
+        const merged = { ...saved, ...memoryGroupsByDevice[groupScopeKey] }
+        memoryGroupsByDevice[groupScopeKey] = merged
+        setGroupsByDevice(current => ({
+          ...current, [groupScopeKey]: { ...merged, ...current[groupScopeKey] },
+        }))
+      }
     }).catch(() => {
       if (!cancelled) setGroupStorageError(strings.comfort.cacheRestoreFailed)
     }).finally(() => {
       if (!cancelled) setLoadedDeviceId(deviceId)
     })
     return () => { cancelled = true }
-  }, [deviceId])
+  }, [deviceId, groupScopeKey])
   const [visibleCounts, setVisibleCounts] = useState<Record<string, number>>({})
 
   // 浮窗定位：记录工具栏在覆盖层坐标系中的底部位置（默认兜底 200，测量后精准对齐）
@@ -154,8 +391,34 @@ export function HostSessionsDrawer({
   const styles = useThemedStyles(createStyles)
   const insets = useSafeAreaInsets()
 
-  const creatingSessionRef = useRef(false)
-  const lastNewSessionTimeRef = useRef(0)
+  useEffect(() => {
+    if (renameTarget) {
+      setRenameDraft(renameTarget.currentTitle)
+      setRenameError(null)
+      setRenaming(false)
+    } else {
+      setRenameDraft('')
+      setRenameError(null)
+      setRenaming(false)
+    }
+  }, [renameTarget])
+
+  useEffect(() => {
+    if (!connected) {
+      setMenuSession(null)
+      setRenameTarget(null)
+      setRenameError(null)
+      setRenaming(false)
+      setToastMessage(null)
+    }
+  }, [connected])
+
+  useEffect(() => {
+    if (!toastMessage) return
+    const timer = setTimeout(() => setToastMessage(null), 2000)
+    return () => clearTimeout(timer)
+  }, [toastMessage])
+
   // 打开浮窗时测量工具栏位置，确保浮窗紧贴工具栏下方
   useEffect(() => {
     if (!showConfigModal) return
@@ -172,45 +435,85 @@ export function HostSessionsDrawer({
     return () => cancelAnimationFrame(raf)
   }, [showConfigModal])
 
-  const handleNewSession = async () => {
-    const now = Date.now()
-    if (now - lastNewSessionTimeRef.current < 800) return
-    if (creatingSessionRef.current || busy !== undefined || !connected) return
-
-    const targetWs = backendWorkspaces[0]?.workspaceId
-    const currentMessages = selected === undefined ? [] : useAppStore.getState().messages[selected.sessionId] ?? []
-    const isCurrentBlank = selected !== undefined && currentMessages.length === 0 && selected.blank !== false
-    const currentWs = workspaces.find(w => selected !== undefined && w.sessionIds.includes(selected.sessionId))
-    if (isCurrentBlank && (targetWs === undefined || currentWs?.workspaceId === targetWs)) {
-      onClose()
-      return
-    }
-
-    creatingSessionRef.current = true
-    lastNewSessionTimeRef.current = now
-    try {
-      const ok = await createSession(targetWs)
-      if (ok) onClose()
-    } finally {
-      creatingSessionRef.current = false
-    }
-  }
-
   const handleRefresh = async () => {
     if (refreshing || busy !== undefined || !connected) return
     setRefreshing(true)
     try {
-      await refreshWorkspaces(backend)
+      if (drawerMode === 'bot') {
+        await useBotTeamStore.getState().refresh(true)
+      } else {
+        await refreshWorkspaces(backend)
+      }
     } finally {
       setRefreshing(false)
     }
   }
 
+  const handleCreateSessionInWorkspace = async (workspace: WorkspaceView) => {
+    const targetBackend = workspace.backend ?? backend
+    const created = await createSession(workspace.workspaceId, targetBackend)
+    if (created) {
+      if (drawerMode !== 'agent') handleSwitchMode('agent')
+      if (!inline) closeDrawer()
+    }
+  }
+
+  const handleOpenFavorite = async (workspaceId: string, favBackend: AgentBackend) => {
+    if (favBackend !== backend) {
+      setBackend(favBackend)
+      if (deviceId !== undefined) void saveWorkspaceBackend(deviceId, favBackend)
+    }
+    const matchedWs = workspaces.find(w => w.workspaceId === workspaceId && (w.backend ?? 'harness') === favBackend)
+    if (matchedWs) {
+      const wsSessions = sessions
+        .filter(s => (s.backend ?? 'harness') === favBackend && matchedWs.sessionIds.includes(s.sessionId) && !archivedIds.includes(s.sessionId))
+        .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+      if (wsSessions[0]) {
+        if (drawerMode !== 'agent') handleSwitchMode('agent')
+        await onSelect(wsSessions[0])
+        if (!inline) closeDrawer()
+        return
+      }
+    }
+    const created = await createSession(workspaceId, favBackend)
+    if (created) {
+      if (drawerMode !== 'agent') handleSwitchMode('agent')
+      if (!inline) closeDrawer()
+    }
+  }
+
+  const confirmDeleteWorkspace = (target: WorkspaceView) => {
+    Alert.alert(
+      strings.workspaces.deleteTitle(target.title),
+      strings.workspaces.deleteBody,
+      [
+        { text: strings.common.cancel, style: 'cancel' },
+        { text: strings.workspaces.delete, style: 'destructive', onPress: () => void deleteWorkspace(target.workspaceId) },
+      ],
+    )
+  }
+
+  const hostFavorites = useMemo(
+    () => (deviceId ? favoriteWorkspaces.filter(fav => fav.deviceId === deviceId) : []),
+    [deviceId, favoriteWorkspaces],
+  )
+  const actionTargetIndex = workspaceActionTarget
+    ? backendWorkspaces.findIndex(w => w.workspaceId === workspaceActionTarget.workspaceId)
+    : -1
+  const actionTargetFavorited = Boolean(
+    deviceId && workspaceActionTarget && favoriteWorkspaces.some(
+      fav => fav.deviceId === deviceId
+        && fav.workspaceId === workspaceActionTarget.workspaceId
+        && fav.backend === (workspaceActionTarget.backend ?? backend),
+    ),
+  )
+
   const toggleWorkspace = (id: string) => {
-    if (deviceId === undefined || !groupsReady) return
-    const expanded = !(expandedWorkspaces[id] ?? true)
+    if (deviceId === undefined || groupScopeKey === undefined) return
+    const expanded = !(expandedWorkspaces[id] ?? false)
+    memoryGroupsByDevice[groupScopeKey] = { ...memoryGroupsByDevice[groupScopeKey], [id]: expanded }
     setGroupsByDevice(current => ({ ...current,
-      [deviceId]: { ...current[deviceId], [id]: expanded },
+      [groupScopeKey]: { ...current[groupScopeKey], [id]: expanded },
     }))
     void saveHostSessionsDrawerGroup(deviceId, id, expanded).catch(() => {
       if (useAppStore.getState().selectedDevice?.deviceId === deviceId) {
@@ -219,10 +522,12 @@ export function HostSessionsDrawer({
     })
   }
 
+  const botTeamState = useBotTeamStore(state => state.state)
+
   const filteredSessions = useMemo(() => {
     const known = selected && !sessions.some(session => session.sessionId === selected.sessionId)
       ? [selected, ...sessions] : sessions
-    let list = known.filter(session => (session.backend ?? 'harness') === backend)
+    let list = known.filter(session => (session.backend ?? 'harness') === backend && !isKnownBotSessionId(session.sessionId, botTeamState, hostScope))
     if (filterMode === 'hideArchived') {
       list = list.filter(s => !archivedIds.includes(s.sessionId))
     } else if (filterMode === 'archivedOnly') {
@@ -236,43 +541,93 @@ export function HostSessionsDrawer({
       list.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     }
     return list
-  }, [sessions, selected, backend, archivedIds, filterMode, searchQuery, orderBy])
+  }, [sessions, selected, backend, archivedIds, filterMode, searchQuery, orderBy, botTeamState])
 
-  const sections = useMemo(() => {
+  const sections = useMemo<DrawerSection[]>(() => {
+    const partitionPinned = (items: RemoteSession[]) => {
+      const pinned: RemoteSession[] = []
+      const ordinary: RemoteSession[] = []
+      for (const s of items) {
+        const isHarness = (s.backend ?? 'harness') === 'harness'
+        if (isHarness && pinnedSessionIds.includes(s.sessionId) && !archivedIds.includes(s.sessionId)) {
+          pinned.push(s)
+        } else {
+          ordinary.push(s)
+        }
+      }
+      return [...pinned, ...ordinary]
+    }
+
     if (groupBy === 'list') {
-      return [{ id: 'all', title: strings.sessions.allSessions, data: filteredSessions, total: filteredSessions.length, expanded: true }]
+      let ordered = filteredSessions
+      if (orderBy === 'manual') {
+        ordered = applyManualOrder(filteredSessions, manualOrders['all'])
+      }
+      const partitioned = partitionPinned(ordered)
+      return [{ id: 'all', title: strings.sessions.allSessions, data: partitioned, total: partitioned.length, expanded: true, depth: 0 }]
     }
     const recentOrder = new Map(recentIds.map((id, index) => [id, index]))
     if (selected) recentOrder.set(selected.sessionId, recentIds.length)
-    const recent = filteredSessions.filter(session => recentOrder.has(session.sessionId))
-      .sort((a, b) => recentOrder.get(b.sessionId)! - recentOrder.get(a.sessionId)!).slice(0, 5)
-    const recentExpanded = expandedWorkspaces[`recent:${backend}`] ?? true
+    const recent = partitionPinned(
+      filteredSessions
+        .filter(session => recentOrder.has(session.sessionId))
+        .sort((a, b) => recentOrder.get(b.sessionId)! - recentOrder.get(a.sessionId)!)
+        .slice(0, 5),
+    )
+    const recentExpanded = expandedWorkspaces[`recent:${backend}`] ?? false
     const recentSections = recent.length ? [{ id: `recent:${backend}`, title: strings.comfort.recent,
-      data: recentExpanded ? recent : [], total: recent.length, expanded: recentExpanded }] : []
+      data: recentExpanded ? recent : [], total: recent.length, expanded: recentExpanded, depth: 0 }] : []
     const wsList: Array<WorkspaceView | { workspaceId: string; title: string; path: string; sessionIds: string[] }> =
       backendWorkspaces.length > 0 ? backendWorkspaces : [{ workspaceId: 'default', title: 'Default', path: '', sessionIds: [] }]
-    return [...recentSections, ...wsList.map(ws => {
-      const isDefault = ws.workspaceId === 'default'
-      const wsSessions = filteredSessions.filter(s =>
-        isDefault ? !backendWorkspaces.some(w => w.sessionIds.includes(s.sessionId)) : ws.sessionIds.includes(s.sessionId)
-      )
-      const groupId = `workspace:${backend}:${ws.workspaceId}`
-      const isExpanded = expandedWorkspaces[groupId] ?? true
-      const limit = visibleCounts[groupId] ?? SESSION_PAGE_SIZE
-      const title = ws.title || ws.path || ws.workspaceId
-      return {
-        id: groupId,
-        title,
-        total: wsSessions.length,
-        expanded: isExpanded,
-        data: isExpanded ? wsSessions.slice(0, limit) : [],
-      }
-    })]
-  }, [groupBy, backendWorkspaces, backend, filteredSessions, recentIds, selected, expandedWorkspaces, visibleCounts, language])
+
+    if (groupBy === 'workspace') {
+      return [...recentSections, ...wsList.map(ws => {
+        const isDefault = ws.workspaceId === 'default'
+        let wsSessions = filteredSessions.filter(s =>
+          isDefault ? !backendWorkspaces.some(w => w.sessionIds.includes(s.sessionId)) : ws.sessionIds.includes(s.sessionId)
+        )
+        const groupId = `workspace:${backend}:${ws.workspaceId}`
+        if (orderBy === 'manual') {
+          wsSessions = applyManualOrder(wsSessions, manualOrders[groupId])
+        }
+        const partitioned = partitionPinned(wsSessions)
+        const isExpanded = expandedWorkspaces[groupId] ?? false
+        const limit = visibleCounts[groupId] ?? SESSION_PAGE_SIZE
+        const title = ws.title || ws.path || ws.workspaceId
+        return {
+          id: groupId,
+          title,
+          total: partitioned.length,
+          expanded: isExpanded,
+          data: isExpanded ? partitioned.slice(0, limit) : [],
+          depth: 0,
+          workspaceId: ws.workspaceId,
+        }
+      })]
+    }
+
+    // groupBy === 'workspace-tree'
+    const treeSections = buildTreeSections({
+      backend,
+      wsList,
+      filteredSessions,
+      backendWorkspaces,
+      expandedWorkspaces,
+      visibleCounts,
+      manualOrders,
+      orderBy,
+      searchQuery,
+      partitionPinned,
+      pageSize: SESSION_PAGE_SIZE,
+      defaultExpanded: false,
+    })
+
+    return [...recentSections, ...treeSections]
+  }, [groupBy, backendWorkspaces, backend, filteredSessions, recentIds, selected, expandedWorkspaces, visibleCounts, language, pinnedSessionIds, archivedIds, orderBy, manualOrders, searchQuery])
 
   // 手势与抽屉动画
   const { width: screenWidth } = useWindowDimensions()
-  const drawerWidth = Math.min(Math.round(screenWidth * 0.85), 360)
+  const drawerWidth = Math.round(screenWidth * DRAWER_WIDTH_RATIO)
   const translateX = useRef(new Animated.Value(-drawerWidth)).current
   const overlayOpacity = useRef(new Animated.Value(0)).current
   const dragStartX = useRef(0)
@@ -285,9 +640,16 @@ export function HostSessionsDrawer({
   useEffect(() => {
     onCloseRef.current = onClose
   }, [onClose])
+  const dismissibleRef = useRef(dismissible)
+  useEffect(() => {
+    dismissibleRef.current = dismissible
+  }, [dismissible])
 
   const smoothClose = (withHaptic = true) => {
     if (closingRef.current) return
+    // A cold start parks the user in this drawer without a chosen page; only an
+    // explicit tap (session / Bot) may leave it, never a swipe or the back key.
+    if (!inline && !dismissibleRef.current) return
     closingRef.current = true
     gestureSeq.current++
     dragReady.current = false
@@ -308,6 +670,16 @@ export function HostSessionsDrawer({
     })
   }
 
+  const handleBack = () => {
+    Keyboard.dismiss()
+    if (!inline) {
+      if (!dismissibleRef.current) return
+      smoothClose(true)
+      return
+    }
+    onBack?.()
+  }
+
   useEffect(() => {
     if (inline) return
     const anim = Animated.parallel([
@@ -323,7 +695,10 @@ export function HostSessionsDrawer({
     () =>
       PanResponder.create({
         onStartShouldSetPanResponder: () => false,
-        onMoveShouldSetPanResponder: (_e, g) => (!inline && !closingRef.current ? shouldStartSwipeLeftToClose(g) : false),
+        onStartShouldSetPanResponderCapture: () => false,
+        onMoveShouldSetPanResponder: (_e, g) => (!inline && dismissible && !closingRef.current ? shouldStartSwipeLeftToClose(g) : false),
+        onMoveShouldSetPanResponderCapture: (_e, g) => (!inline && dismissible && !closingRef.current ? shouldStartSwipeLeftToClose(g) : false),
+        onPanResponderTerminationRequest: () => false,
         onPanResponderGrant: () => {
           if (closingRef.current) return
           currentAnim.current?.stop()
@@ -356,6 +731,29 @@ export function HostSessionsDrawer({
     [inline, drawerWidth, translateX, overlayOpacity]
   )
 
+  const touchSwipeStartRef = useRef<{ x0: number; y0: number; t0: number } | undefined>(undefined)
+  const drawerTouchProps = {
+    ...panResponder.panHandlers,
+    onTouchStart: (e: { nativeEvent: { pageX: number; pageY: number } }) => {
+      touchSwipeStartRef.current = { x0: e.nativeEvent.pageX, y0: e.nativeEvent.pageY, t0: Date.now() }
+    },
+    onTouchEnd: (e: { nativeEvent: { pageX: number; pageY: number } }) => {
+      const start = touchSwipeStartRef.current
+      touchSwipeStartRef.current = undefined
+      if (start === undefined || inline || !dismissibleRef.current || closingRef.current) return
+      const dx = e.nativeEvent.pageX - start.x0
+      const dy = e.nativeEvent.pageY - start.y0
+      const dt = Math.max(16, Date.now() - start.t0)
+      const vx = dx / dt
+      if (
+        shouldStartSwipeLeftToClose({ dx, dy, x0: start.x0 })
+        && shouldConfirmSwipeLeftClose({ dx, dy, x0: start.x0, vx })
+      ) {
+        smoothClose(true)
+      }
+    },
+  }
+
   const closeConfig = () => setShowConfigModal(false)
 
   /** 排序配置浮窗（在覆盖层内部渲染，供点击命中） */
@@ -370,6 +768,10 @@ export function HostSessionsDrawer({
       <Pressable style={styles.modalItem} onPress={() => { setGroupBy('workspace'); closeConfig() }}>
         <Text style={styles.modalItemText}>{strings.sessions.groupByWorkspace}</Text>
         {groupBy === 'workspace' && <Check size={14} color={colors.ink} />}
+      </Pressable>
+      <Pressable style={styles.modalItem} onPress={() => { setGroupBy('workspace-tree'); closeConfig() }}>
+        <Text style={styles.modalItemText}>{strings.sessions.groupByWorkspaceTree}</Text>
+        {groupBy === 'workspace-tree' && <Check size={14} color={colors.ink} />}
       </Pressable>
       <Pressable style={styles.modalItem} onPress={() => { setGroupBy('list'); closeConfig() }}>
         <Text style={styles.modalItemText}>{strings.sessions.groupByList}</Text>
@@ -406,13 +808,51 @@ export function HostSessionsDrawer({
     </View>
   )
 
+  const hostStatusDotColor = connectionPhase === 'connected'
+    ? colors.success
+    : connectionPhase === 'connecting' || connectionPhase === 'reconnecting'
+      ? colors.warning
+      : colors.disabled
+  const hostStatusLabel = connectionPhase === 'connected'
+    ? strings.status.online
+    : connectionPhase === 'connecting' || connectionPhase === 'reconnecting'
+      ? strings.status.waiting
+      : strings.status.offline
+  const FooterHostIcon = platform === 'win32' ? Monitor : platform === 'linux' ? Server : Laptop
+  const hostFooterDeviceInfo = (
+    <>
+      <View style={styles.hostFooterIcon}>
+        <FooterHostIcon size={20} color={colors.ink} strokeWidth={1.8} />
+      </View>
+      <View style={styles.hostFooterInfo}>
+        <View style={styles.hostFooterNameRow}>
+          <Text numberOfLines={1} style={styles.hostFooterName}>{deviceName ?? strings.devices.title}</Text>
+          <ChevronsUpDown size={14} color={colors.muted} strokeWidth={1.8} />
+        </View>
+        <View style={styles.hostFooterStatusRow}>
+          <View style={[styles.hostFooterDot, { backgroundColor: hostStatusDotColor }]} />
+          <Text style={styles.hostFooterStatusText}>{hostStatusLabel}</Text>
+        </View>
+      </View>
+    </>
+  )
+
   const content = (
     <View ref={containerRef} style={styles.container} collapsable={false}>
       {/* 当前主机 */}
       <View style={styles.brandHeader}>
-        <Pressable accessibilityRole="button" accessibilityLabel={`${deviceName ?? strings.devices.title} · ${strings.chat.backToWorkspaces}`}
-          onPress={onOpenWorkspaces} hitSlop={8}
-          style={({ pressed }) => [styles.brandLeft, pressed && styles.pressedBg]}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${deviceName ?? strings.devices.title} · ${strings.devices.openInfo}`}
+          onPress={() => {
+            Keyboard.dismiss()
+            if (onOpenDeviceInfo) onOpenDeviceInfo()
+            else if (onOpenHostSwitcher) onOpenHostSwitcher()
+            else if (onOpenWorkspaces) onOpenWorkspaces()
+          }}
+          hitSlop={8}
+          style={({ pressed }) => [styles.brandLeft, pressed && styles.pressedFade]}
+        >
           <Text style={styles.brandTitle} numberOfLines={1}>{deviceName ?? strings.devices.title}</Text>
         </Pressable>
         <View style={styles.brandRight}>
@@ -421,203 +861,735 @@ export function HostSessionsDrawer({
             accessibilityLabel={strings.common.refresh}
             onPress={() => void handleRefresh()}
             hitSlop={8}
-            style={styles.iconBtn}
+            style={({ pressed }) => [styles.iconBtnRound, pressed && styles.pressedBg]}
           >
-            <RefreshCw size={15} color={colors.muted} />
+            <RefreshCw size={17} color={colors.ink} strokeWidth={1.9} />
           </Pressable>
-          {onBack && (
-            <Pressable accessibilityRole="button" accessibilityLabel={backLabel ?? 'Back'} onPress={onBack} hitSlop={8} style={styles.iconBtn}>
-              <ArrowLeft size={16} color={colors.muted} />
+          {Boolean(onBack) && (inline || dismissible) && (
+            <Pressable accessibilityRole="button" accessibilityLabel={backLabel ?? strings.chat.backToChat} onPress={handleBack} hitSlop={8} style={({ pressed }) => [styles.iconBtnRound, pressed && styles.pressedBg]}>
+              <ArrowLeft size={18} color={colors.ink} strokeWidth={1.9} />
             </Pressable>
           )}
         </View>
       </View>
 
-      {/* New Session 按钮 */}
-      <View style={styles.newSessionWrapper}>
+      {/* 顶部模式切换分段胶囊：智能体 / DS-Bot */}
+      <View style={styles.modeSwitcherWrap}>
         <Pressable
-          accessibilityRole="button"
-          onPress={() => void handleNewSession()}
-          style={({ pressed }) => [styles.newSessionBtn, pressed && styles.pressedBg]}
+          accessibilityRole="tab"
+          accessibilityState={{ selected: drawerMode === 'agent' }}
+          accessibilityLabel="智能体"
+          onPress={() => handleSwitchMode('agent')}
+          style={({ pressed }) => [
+            styles.modeSwitcherTab,
+            drawerMode === 'agent' && styles.modeSwitcherTabActive,
+            pressed && styles.pressedFade,
+          ]}
         >
-          <PlusCircle size={16} color={colors.ink} />
-          <Text style={styles.newSessionText}>{strings.sessions.newSession}</Text>
+          <LayoutGrid size={15} color={drawerMode === 'agent' ? colors.primary : colors.muted} strokeWidth={2} />
+          <Text style={[styles.modeSwitcherText, drawerMode === 'agent' && styles.modeSwitcherTextActive]}>
+            智能体
+          </Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="tab"
+          accessibilityState={{ selected: drawerMode === 'bot' }}
+          accessibilityLabel="DS-Bot"
+          onPress={() => handleSwitchMode('bot')}
+          style={({ pressed }) => [
+            styles.modeSwitcherTab,
+            drawerMode === 'bot' && styles.modeSwitcherTabActive,
+            pressed && styles.pressedFade,
+          ]}
+        >
+          <Bot size={15} color={drawerMode === 'bot' ? colors.primary : colors.muted} strokeWidth={2} />
+          <Text style={[styles.modeSwitcherText, drawerMode === 'bot' && styles.modeSwitcherTextActive]}>
+            DS-Bot
+          </Text>
         </Pressable>
       </View>
 
-      {onOpenPlugins !== undefined && (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={strings.plugins.nav}
-          onPress={onOpenPlugins}
-          style={({ pressed }) => [styles.navItem, pressed && styles.pressedBg]}
-        >
-          <Puzzle size={16} color={colors.muted} />
-          <Text style={styles.navItemText}>{strings.plugins.nav}</Text>
-        </Pressable>
-      )}
-
-      {/* 固定自动化入口 */}
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={strings.automation.nav}
-        onPress={() => {
-          if (onOpenAutomationTasks) {
-            onOpenAutomationTasks()
-          } else {
-            Alert.alert(strings.automation.title, strings.automation.empty)
-          }
-        }}
-        style={({ pressed }) => [styles.navItem, pressed && styles.pressedBg]}
-      >
-        <Clock size={16} color={colors.muted} />
-        <Text style={styles.navItemText}>{strings.automation.nav}</Text>
-      </Pressable>
-
-      <ScrollView horizontal showsHorizontalScrollIndicator={false}
-        style={{ flexGrow: 0, flexShrink: 0 }} contentContainerStyle={{ paddingHorizontal: spacing.md, gap: spacing.xxs }}>
-        {backends.map(value => <Pressable key={value} accessibilityRole="tab"
-          accessibilityState={{ selected: backend === value }} onPress={() => setBackend(value)}
-          style={({ pressed }) => [styles.backendTab, backend === value && styles.sessionRowSelected, pressed && styles.pressedBg]}>
-          <Text style={styles.navItemText}>{value === 'harness' ? 'DSH' : value === 'codex' ? 'Codex' : value}</Text>
-        </Pressable>)}
-      </ScrollView>
-
-      {/* Workspaces 标题栏与工具栏 */}
-      <View ref={toolbarRef} style={styles.workspacesToolbarArea} collapsable={false}>
-        <View style={styles.workspacesToolbar}>
-          <Text style={styles.workspacesTitle}>{strings.sessions.workspaces}</Text>
-          <View style={styles.toolbarActions}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={strings.comfort.search}
-              hitSlop={6}
-              onPress={() => setShowSearch(prev => !prev)}
-              style={styles.iconBtn}
-            >
-              <Search size={14} color={showSearch ? colors.ink : colors.muted} />
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={strings.sessions.viewOptions}
-              hitSlop={6}
-              onPress={() => setShowConfigModal(prev => !prev)}
-              style={styles.iconBtn}
-            >
-              <Sliders size={14} color={showConfigModal ? colors.ink : colors.muted} />
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={strings.sessions.addWorkspace}
-              hitSlop={6}
-              onPress={() => {
-                Alert.alert(
-                  strings.workspaces.title,
-                  strings.sessions.manageWorkspacesPrompt,
-                  [
-                    { text: strings.common.cancel, style: 'cancel' },
-                    { text: strings.sessions.goToWorkspaces, onPress: () => { onClose(); onBack() } }
-                  ]
-                )
-              }}
-              style={styles.iconBtn}
-            >
-              <FolderPlus size={14} color={colors.muted} />
-            </Pressable>
+      {drawerMode === 'bot' ? (
+        <BotSidebarSection
+          searchQuery={botSearchQuery}
+          onSearchChange={setBotSearchQuery}
+          showSearch={showBotSearch}
+          onSelectBot={id => {
+            saveHostMode(hostScope, 'bot')
+            onBotModeChange?.(true)
+            useBotTeamStore.getState().setSelectedId(id)
+            onSelectBot?.(id)
+            if (!inline) closeDrawer()
+          }}
+        />
+      ) : (
+        <>
+          {/* 智能体导航卡片区 (GroupCard / GroupRow 设计风格) */}
+          <View style={styles.navGroupWrap}>
+            <GroupCard>
+              <GroupRow
+                first
+                icon={Bot}
+                label="智能体平台"
+                value={harnessDisplayName(backend)}
+                onPress={() => setHarnessPickerOpen(true)}
+              />
+              {onOpenPlugins !== undefined && (
+                <GroupRow
+                  icon={Puzzle}
+                  label={strings.plugins.nav}
+                  onPress={() => {
+                    if (!inline) closeDrawer()
+                    onOpenPlugins()
+                  }}
+                />
+              )}
+              <GroupRow
+                icon={Clock}
+                label={strings.automation.nav}
+                onPress={() => {
+                  if (onOpenAutomationTasks) {
+                    if (!inline) closeDrawer()
+                    onOpenAutomationTasks()
+                  } else {
+                    Alert.alert(strings.automation.title, strings.automation.empty)
+                  }
+                }}
+              />
+            </GroupCard>
           </View>
-        </View>
-      </View>
 
-      {/* 搜索框 */}
-      {showSearch && (
-        <View style={styles.searchContainer}>
-          <Search size={14} color={colors.muted} />
-          <TextInput
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            placeholder={strings.comfort.search}
-            placeholderTextColor={colors.muted}
-            style={styles.searchInput}
-            autoFocus
-          />
-        </View>
-      )}
-
-      {groupStorageError && <Text accessibilityRole="alert" style={{ color: colors.muted, paddingHorizontal: spacing.md }}>{groupStorageError}</Text>}
-      {/* 会话树状列表 */}
-      <SectionList
-        sections={groupsReady ? sections : []}
-        ListEmptyComponent={groupsReady ? null : <ActivityIndicator color={colors.muted} accessibilityLabel={strings.workspaces.loading} />}
-        keyExtractor={item => item.sessionId}
-        keyboardShouldPersistTaps="handled"
-        contentContainerStyle={styles.listContainer}
-        stickySectionHeadersEnabled={false}
-        renderSectionHeader={({ section }) => {
-          if (groupBy === 'list') return null
-          const isExp = section.expanded
-          return (
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => toggleWorkspace(section.id)}
-              style={({ pressed }) => [styles.workspaceRow, pressed && styles.pressedBg]}
-            >
-              <View style={styles.workspaceRowLeft}>
-                {isExp ? <FolderOpen size={16} color={colors.muted} /> : <Folder size={16} color={colors.muted} />}
-                <Text style={styles.workspaceRowTitle} numberOfLines={1}>
-                  {section.title}
-                </Text>
+          {/* Workspaces 标题栏与工具栏 */}
+          <View ref={toolbarRef} style={styles.workspacesToolbarArea} collapsable={false}>
+            <View style={styles.workspacesToolbar}>
+              <Text style={styles.workspacesTitle}>{strings.sessions.workspaces}</Text>
+              <View style={styles.toolbarActions}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={strings.comfort.search}
+                  hitSlop={6}
+                  onPress={() => setShowSearch(prev => !prev)}
+                  style={styles.iconBtn}
+                >
+                  <Search size={17} color={showSearch ? colors.ink : colors.muted} />
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={strings.sessions.viewOptions}
+                  hitSlop={6}
+                  onPress={() => setShowConfigModal(prev => !prev)}
+                  style={styles.iconBtn}
+                >
+                  <Sliders size={17} color={showConfigModal ? colors.ink : colors.muted} />
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={strings.sessions.addWorkspace}
+                  hitSlop={6}
+                  onPress={() => setCreateWorkspaceOpen(true)}
+                  style={styles.iconBtn}
+                >
+                  <FolderPlus size={17} color={colors.muted} />
+                </Pressable>
               </View>
-              {isExp ? <ChevronDown size={14} color={colors.muted} /> : <ChevronRight size={14} color={colors.muted} />}
-            </Pressable>
-          )
-        }}
+            </View>
+          </View>
+
+          {/* 搜索框 */}
+          {showSearch && (
+            <View style={styles.searchContainer}>
+              <Search size={16} color={colors.muted} />
+              <TextInput
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                placeholder={strings.comfort.search}
+                placeholderTextColor={colors.muted}
+                style={styles.searchInput}
+                autoFocus
+              />
+            </View>
+          )}
+
+          {groupStorageError && <Text accessibilityRole="alert" style={{ color: colors.muted, paddingHorizontal: spacing.md }}>{groupStorageError}</Text>}
+          {/* 会话树状列表 */}
+          <SectionList<RemoteSession, DrawerSection>
+            scrollEnabled={dragState === null}
+            sections={groupsReady ? sections : []}
+            ListHeaderComponent={
+              hostFavorites.length > 0 ? (
+                <View style={styles.favoritesWrap}>
+                  <SectionTitle>{strings.devices.favorites}</SectionTitle>
+                  <GroupCard>
+                    {hostFavorites.map((fav, idx) => (
+                      <GroupRow
+                        key={fav.key}
+                        first={idx === 0}
+                        icon={Star}
+                        label={fav.title}
+                        detail={fav.path || undefined}
+                        onPress={() => void handleOpenFavorite(fav.workspaceId, fav.backend)}
+                        accessory={
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={strings.devices.removeFavorite(fav.title)}
+                            hitSlop={8}
+                            onPress={e => {
+                              e.stopPropagation()
+                              void removeFavoriteWorkspace(fav.deviceId, fav.key)
+                            }}
+                            style={styles.workspaceSmallBtn}
+                          >
+                            <X size={14} color={colors.muted} />
+                          </Pressable>
+                        }
+                      />
+                    ))}
+                  </GroupCard>
+                </View>
+              ) : null
+            }
+            ListEmptyComponent={groupsReady ? null : <ActivityIndicator color={colors.muted} accessibilityLabel={strings.workspaces.loading} />}
+            keyExtractor={item => item.sessionId}
+            keyboardShouldPersistTaps="handled"
+            style={styles.sectionList}
+            contentContainerStyle={styles.listContainer}
+            stickySectionHeadersEnabled={false}
+            renderSectionHeader={({ section }) => {
+              if (groupBy === 'list' || !section.title) return null
+              const isExp = section.expanded
+              const hasItems = isExp && section.data.length > 0
+              const depth = section.depth ?? 0
+              const matchedWorkspace = section.workspaceId && section.workspaceId !== 'default'
+                ? backendWorkspaces.find(w => w.workspaceId === section.workspaceId)
+                : undefined
+              const isFavorited = Boolean(
+                deviceId && matchedWorkspace && favoriteWorkspaces.some(
+                  f => f.deviceId === deviceId && f.workspaceId === matchedWorkspace.workspaceId && f.backend === (matchedWorkspace.backend ?? backend),
+                ),
+              )
+              return (
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => toggleWorkspace(section.id)}
+                  onLongPress={() => {
+                    if (!matchedWorkspace) return
+                    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined)
+                    setWorkspaceActionTarget(matchedWorkspace)
+                  }}
+                  style={({ pressed }) => [
+                    styles.workspaceRow,
+                    hasItems ? styles.workspaceRowCardTop : styles.workspaceRowCardSingle,
+                    pressed && styles.pressedBg,
+                    depth > 0 && { paddingLeft: spacing.md + depth * 14 },
+                  ]}
+                >
+                  <View style={styles.workspaceRowLeft}>
+                    {isExp
+                      ? <FolderOpen size={18} color={colors.primary} strokeWidth={1.8} />
+                      : <Folder size={18} color={colors.muted} strokeWidth={1.8} />}
+                    <Text style={styles.workspaceRowTitle} numberOfLines={1}>
+                      {section.title}
+                    </Text>
+                    {isFavorited && (
+                      <Star size={12} color={colors.primary} fill={colors.primary} />
+                    )}
+                    {section.total > 0 && (
+                      <Text style={styles.workspaceCountText}>{section.total}</Text>
+                    )}
+                  </View>
+                  <View style={styles.workspaceRowRight}>
+                    {matchedWorkspace !== undefined && (
+                      <>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={strings.workspaces.newSessionIn(section.title)}
+                          hitSlop={6}
+                          onPress={e => {
+                            e.stopPropagation()
+                            void handleCreateSessionInWorkspace(matchedWorkspace)
+                          }}
+                          style={styles.workspaceSmallBtn}
+                        >
+                          <Plus size={15} color={colors.muted} />
+                        </Pressable>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`${section.title} · ${strings.workspaces.options}`}
+                          hitSlop={6}
+                          onPress={e => {
+                            e.stopPropagation()
+                            setWorkspaceActionTarget(matchedWorkspace)
+                          }}
+                          style={styles.workspaceSmallBtn}
+                        >
+                          <MoreHorizontal size={15} color={colors.muted} />
+                        </Pressable>
+                      </>
+                    )}
+                    {isExp ? <ChevronDown size={16} color={colors.subtle} /> : <ChevronRight size={16} color={colors.subtle} />}
+                  </View>
+                </Pressable>
+              )
+            }}
         renderSectionFooter={({ section }) => {
-          if (groupBy === 'list' || !section.expanded || section.data.length >= section.total) return null
+          if (groupBy === 'list' || !section.expanded || section.hasMoreFooter === false || section.data.length >= section.total) return null
           const remaining = section.total - section.data.length
+          const countKey = section.workspaceId ? `workspace:${backend}:${section.workspaceId}` : section.id
+          const depth = section.depth ?? 0
           return (
             <Pressable
               accessibilityRole="button"
               onPress={() =>
                 setVisibleCounts(c => ({
                   ...c,
-                  [section.id]: (c[section.id] ?? SESSION_PAGE_SIZE) + SESSION_PAGE_SIZE,
+                  [countKey]: (c[countKey] ?? SESSION_PAGE_SIZE) + SESSION_PAGE_SIZE,
                 }))
               }
-              style={styles.showMoreRow}
+              style={[
+                styles.showMoreRow,
+                depth > 0 && { paddingLeft: spacing.lg + spacing.md + depth * 14 },
+              ]}
             >
               <Text style={styles.showMoreText}>{strings.sessions.showMoreSessions(remaining)}</Text>
             </Pressable>
           )
         }}
-        renderItem={({ item }) => {
-          const isSelected = item.sessionId === selected?.sessionId
+        renderItem={({ item, section, index }) => {
+          const isSelected = item.sessionId === selected?.sessionId && !section.id.startsWith('recent:')
+          const hasFooter = groupBy !== 'list' && section.expanded && section.hasMoreFooter !== false && section.data.length < section.total
+          const isFirstInList = groupBy === 'list' && index === 0
+          const isLastInCard = index === section.data.length - 1 && !hasFooter
           const isRunning = browseStatus(item, lifecycles[item.sessionId]) === 'running'
+          const isHarness = (item.backend ?? 'harness') === 'harness'
+          const isPinned = isHarness && pinnedSessionIds.includes(item.sessionId) && !archivedIds.includes(item.sessionId)
+          const isArchived = isHarness && archivedIds.includes(item.sessionId)
           const timeStr = formatRelativeTime(item.updatedAt)
+          const displayTitle = resolveSessionDisplayTitle(item) ?? strings.sessions.untitled
+          const accessibilityLabel = isPinned
+            ? `${displayTitle}, ${strings.sessions.pinned}`
+            : displayTitle
+          const depth = section.depth ?? 0
+          const accountKey = section.workspaceId ? `workspace:${backend}:${section.workspaceId}` : section.id
+          const isDragging = dragState?.sessionId === item.sessionId && dragState.sectionId === section.id
+          const isDragTarget = dragState !== null && dragState.sectionId === section.id && dragState.overIndex === index && !isDragging && isPinned === dragState.isPinned
+          const dropAbove = isDragTarget && dragState.fromIndex > index
+          const dropBelow = isDragTarget && dragState.fromIndex < index
 
           return (
             <Pressable
               accessibilityRole="button"
+              accessibilityLabel={accessibilityLabel}
+              accessibilityState={{ selected: isSelected }}
               onPress={() => {
-                if (isSelected) onClose()
+                if (justDraggedRef.current || dragState !== null) return
+                if (isSelected) closeDrawer()
                 else void onSelect(item)
+              }}
+              onLongPress={() => {
+                if (searchQuery.trim() || section.id.startsWith('recent:')) {
+                  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined)
+                  setMenuSession(item)
+                  return
+                }
+                void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined)
+                setDragState({
+                  sessionId: item.sessionId,
+                  sectionId: section.id,
+                  accountKey,
+                  fromIndex: index,
+                  overIndex: index,
+                  isPinned,
+                })
+                dragActiveRef.current = true
+              }}
+              delayLongPress={300}
+              onTouchStart={(e) => {
+                touchStartY.current = e.nativeEvent.pageY
+              }}
+              onTouchMove={(e) => {
+                if (!dragActiveRef.current || !dragState || dragState.sessionId !== item.sessionId) return
+                const currentY = e.nativeEvent.pageY
+                const dy = currentY - touchStartY.current
+                const rowHeight = 46
+                const deltaSlots = Math.round(dy / rowHeight)
+                const pinnedCount = section.data.filter(s => {
+                  const isH = (s.backend ?? 'harness') === 'harness'
+                  return isH && pinnedSessionIds.includes(s.sessionId) && !archivedIds.includes(s.sessionId)
+                }).length
+                const minSlot = dragState.isPinned ? 0 : pinnedCount
+                const maxSlot = dragState.isPinned ? Math.max(0, pinnedCount - 1) : Math.max(minSlot, section.data.length - 1)
+                const newIndex = Math.max(minSlot, Math.min(maxSlot, dragState.fromIndex + deltaSlots))
+                if (newIndex !== dragState.overIndex) {
+                  setDragState(curr => curr ? { ...curr, overIndex: newIndex } : null)
+                }
+              }}
+              onTouchEnd={() => {
+                if (dragActiveRef.current && dragState && dragState.sessionId === item.sessionId) {
+                  justDraggedRef.current = true
+                  setTimeout(() => { justDraggedRef.current = false }, 250)
+                  const activeDrag = dragState
+                  dragActiveRef.current = false
+                  setDragState(null)
+                  const { fromIndex, overIndex, accountKey: currentAccountKey } = activeDrag
+                  if (fromIndex !== overIndex) {
+                    const targetSession = section.data[overIndex]
+                    const targetIsPinned = targetSession && (targetSession.backend ?? 'harness') === 'harness' && pinnedSessionIds.includes(targetSession.sessionId) && !archivedIds.includes(targetSession.sessionId)
+                    if (targetSession && targetIsPinned === isPinned) {
+                      const allGroupSessions = sessions.filter(s => {
+                        if ((s.backend ?? 'harness') !== backend) return false
+                        if (groupBy === 'list') return true
+                        const isDefault = section.workspaceId === 'default'
+                        return isDefault
+                          ? !backendWorkspaces.some(w => w.sessionIds.includes(s.sessionId))
+                          : section.workspaceId ? backendWorkspaces.find(w => w.workspaceId === section.workspaceId)?.sessionIds.includes(s.sessionId) : false
+                      })
+                      if (orderBy === 'updated') {
+                        allGroupSessions.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+                      }
+                      const baselineSessions = orderBy === 'manual'
+                        ? applyManualOrder(allGroupSessions, manualOrders[currentAccountKey])
+                        : allGroupSessions
+                      const fullIds = baselineSessions.map(s => s.sessionId)
+                      const direction = fromIndex < overIndex ? 'after' : 'before'
+                      const next = reorderSessionIds(fullIds, item.sessionId, targetSession.sessionId, direction)
+                      setManualOrders(prev => ({ ...prev, [currentAccountKey]: next }))
+                      if (orderBy === 'updated') {
+                        setOrderBy('manual')
+                      }
+                      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined)
+                    }
+                  }
+                }
+              }}
+              onTouchCancel={() => {
+                dragActiveRef.current = false
+                setDragState(null)
               }}
               style={({ pressed }) => [
                 styles.sessionRow,
+                isFirstInList && styles.sessionRowCardTop,
+                isLastInCard && styles.sessionRowCardBottom,
+                depth > 0 && { paddingLeft: spacing.lg + spacing.xs + depth * 14 },
                 isSelected && styles.sessionRowSelected,
                 pressed && styles.pressedBg,
+                isDragging && styles.sessionRowDragging,
+                dropAbove && styles.dropTargetAbove,
+                dropBelow && styles.dropTargetBelow,
               ]}
             >
               <View style={styles.statusIndicatorSlot}>
                 {isRunning && <View style={styles.runningDot} />}
               </View>
-              <Text style={[styles.sessionText, isSelected && styles.sessionTextSelected]} numberOfLines={1}>
-                {resolveSessionDisplayTitle(item) ?? strings.sessions.untitled}
+              <Text
+                style={[
+                  styles.sessionText,
+                  isSelected && styles.sessionTextSelected,
+                  isArchived && styles.archivedText,
+                ]}
+                numberOfLines={1}
+              >
+                {displayTitle}
               </Text>
               {timeStr ? <Text style={styles.timeText}>{timeStr}</Text> : null}
+              {isPinned && (
+                <View style={styles.pinIndicator} accessibilityLabel={strings.sessions.pinned}>
+                  <OfficialMenuIcons.pinFill size={13} color={colors.ink} />
+                </View>
+              )}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={strings.sessions.moreActions}
+                hitSlop={8}
+                onPress={(e) => {
+                  e.stopPropagation()
+                  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined)
+                  setMenuSession(item)
+                }}
+                style={styles.moreActionBtn}
+              >
+                <OfficialMenuIcons.ellipsis size={16} color={colors.muted} />
+              </Pressable>
             </Pressable>
           )
         }}
       />
+        </>
+      )}
+
+      {/* 底部常驻栏：左侧当前远程主机状态与切换入口，右侧唯一设置按钮 */}
+      <View style={styles.hostFooterBar}>
+        {onOpenHostSwitcher !== undefined ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`${deviceName ?? strings.devices.title} · ${strings.remoteHosts.switchTitle}`}
+            onPress={() => { Keyboard.dismiss(); onOpenHostSwitcher() }}
+            style={({ pressed }) => [styles.hostFooterLeft, pressed && styles.pressedBg]}
+          >
+            {hostFooterDeviceInfo}
+          </Pressable>
+        ) : (
+          <View style={styles.hostFooterLeft}>{hostFooterDeviceInfo}</View>
+        )}
+        {onOpenSettings !== undefined && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={strings.settings.title}
+            onPress={() => {
+              Keyboard.dismiss()
+              if (!inline) closeDrawer()
+              onOpenSettings()
+            }}
+            hitSlop={8}
+            style={({ pressed }) => [styles.iconBtnRound, pressed && styles.pressedBg]}
+          >
+            <Settings size={18} color={colors.ink} strokeWidth={1.9} />
+          </Pressable>
+        )}
+      </View>
+
+      {/* 会话上下文操作浮层/菜单 */}
+      {menuSession && (
+        <Modal
+          transparent
+          animationType="fade"
+          visible={true}
+          onRequestClose={() => setMenuSession(null)}
+          statusBarTranslucent
+        >
+          <Pressable style={styles.menuBackdrop} onPress={() => setMenuSession(null)}>
+            <View style={styles.contextMenuCard} onStartShouldSetResponder={() => true}>
+              <View style={styles.menuHeader}>
+                <Text style={styles.menuTitle} numberOfLines={1}>
+                  {resolveSessionDisplayTitle(menuSession) ?? strings.sessions.untitled}
+                </Text>
+              </View>
+
+              {canUseHarnessActions && (
+                <Pressable
+                  accessibilityRole="menuitem"
+                  accessibilityLabel={menuIsPinned ? strings.sessions.unpinSession : strings.sessions.pinSession}
+                  style={({ pressed }) => [styles.menuItem, pressed && styles.pressedBg]}
+                  onPress={async () => {
+                    const sid = menuSession.sessionId
+                    const targetBackend = menuSession.backend
+                    setMenuSession(null)
+                    if (menuIsPinned) {
+                      const ok = await unpinSession(sid, targetBackend)
+                      if (!ok) setToastMessage(strings.sessions.unpinFailed)
+                    } else {
+                      const ok = await pinSession(sid, targetBackend)
+                      if (!ok) setToastMessage(strings.sessions.pinFailed)
+                    }
+                  }}
+                >
+                  {menuIsPinned ? (
+                    <OfficialMenuIcons.pinFill size={16} color={colors.ink} />
+                  ) : (
+                    <OfficialMenuIcons.pin size={16} color={colors.ink} />
+                  )}
+                  <Text style={styles.menuItemText}>
+                    {menuIsPinned ? strings.sessions.unpinSession : strings.sessions.pinSession}
+                  </Text>
+                </Pressable>
+              )}
+
+              {canUseHarnessActions && (
+                <Pressable
+                  accessibilityRole="menuitem"
+                  accessibilityLabel={strings.sessions.renameSession}
+                  style={({ pressed }) => [styles.menuItem, pressed && styles.pressedBg]}
+                  onPress={() => {
+                    const target = {
+                      sessionId: menuSession.sessionId,
+                      currentTitle: resolveSessionDisplayTitle(menuSession) ?? '',
+                      backend: menuSession.backend,
+                    }
+                    setMenuSession(null)
+                    setRenameError(null)
+                    setRenameTarget(target)
+                  }}
+                >
+                  <OfficialMenuIcons.edit size={16} color={colors.ink} />
+                  <Text style={styles.menuItemText}>{strings.sessions.renameSession}</Text>
+                </Pressable>
+              )}
+
+              {canUseHarnessActions && (
+                <Pressable
+                  accessibilityRole="menuitem"
+                  accessibilityLabel={strings.sessions.forkSession}
+                  style={({ pressed }) => [styles.menuItem, pressed && styles.pressedBg]}
+                  onPress={async () => {
+                    const sid = menuSession.sessionId
+                    const targetBackend = menuSession.backend
+                    setMenuSession(null)
+                    const created = await forkSession(sid, targetBackend)
+                    if (created) {
+                      closeDrawer()
+                    }
+                  }}
+                >
+                  <OfficialMenuIcons.fork size={16} color={colors.ink} />
+                  <Text style={styles.menuItemText}>{strings.sessions.forkSession}</Text>
+                </Pressable>
+              )}
+
+              {canUseHarnessActions && (
+                <Pressable
+                  accessibilityRole="menuitem"
+                  accessibilityLabel={menuIsArchived ? strings.sessions.unarchiveSession : strings.sessions.archiveSession}
+                  style={({ pressed }) => [styles.menuItem, pressed && styles.pressedBg]}
+                  onPress={async () => {
+                    const sid = menuSession.sessionId
+                    const wasArchived = menuIsArchived
+                    const isCurrent = sid === selected?.sessionId
+                    setMenuSession(null)
+                    if (wasArchived) {
+                      const ok = await unarchiveSession(sid, menuSession.backend)
+                      if (!ok) setToastMessage(strings.sessions.unarchiveFailed)
+                    } else {
+                      const ok = await archiveSession(sid)
+                      if (!ok) {
+                        setToastMessage(strings.sessions.archiveFailed)
+                      } else if (isCurrent) {
+                        closeDrawer()
+                      }
+                    }
+                  }}
+                >
+                  {menuIsArchived ? (
+                    <OfficialMenuIcons.unarchive size={16} color={colors.ink} />
+                  ) : (
+                    <OfficialMenuIcons.archive size={16} color={colors.ink} />
+                  )}
+                  <Text style={styles.menuItemText}>
+                    {menuIsArchived ? strings.sessions.unarchiveSession : strings.sessions.archiveSession}
+                  </Text>
+                </Pressable>
+              )}
+
+              {/* 复制 Session ID 对所有会话可用 */}
+              <Pressable
+                accessibilityRole="menuitem"
+                accessibilityLabel={strings.sessions.copySessionId}
+                style={({ pressed }) => [styles.menuItem, pressed && styles.pressedBg]}
+                onPress={async () => {
+                  const sid = menuSession.sessionId
+                  setMenuSession(null)
+                  try {
+                    await Clipboard.setStringAsync(sid)
+                    setToastMessage(strings.sessions.sessionIdCopied)
+                    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined)
+                  } catch {
+                    setToastMessage(strings.sessions.copyFailed)
+                  }
+                }}
+              >
+                <OfficialMenuIcons.copy size={16} color={colors.ink} />
+                <Text style={styles.menuItemText}>{strings.sessions.copySessionId}</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Modal>
+      )}
+
+      {/* 重命名模态弹窗 */}
+      {renameTarget && (
+        <Modal
+          transparent
+          animationType="fade"
+          visible={true}
+          onRequestClose={() => {
+            if (!renaming) {
+              setRenameTarget(null)
+              setRenameError(null)
+            }
+          }}
+          statusBarTranslucent
+        >
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.renameBackdrop}
+          >
+            <View style={styles.renameCard}>
+              <Text style={styles.renameModalTitle}>{strings.sessions.renameSessionTitle}</Text>
+              <TextInput
+                value={renameDraft}
+                onChangeText={(text) => {
+                  setRenameDraft(text)
+                  if (renameError) setRenameError(null)
+                }}
+                placeholder={strings.sessions.renamePlaceholder}
+                placeholderTextColor={colors.muted}
+                style={styles.renameInput}
+                autoFocus
+                selectTextOnFocus
+                editable={!renaming}
+                accessibilityLabel={strings.sessions.renameSessionTitle}
+              />
+              {renameError ? (
+                <Text accessibilityRole="alert" style={styles.renameErrorText}>
+                  {renameError}
+                </Text>
+              ) : null}
+              <View style={styles.renameButtonRow}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={strings.common.cancel}
+                  disabled={renaming}
+                  onPress={() => {
+                    setRenameTarget(null)
+                    setRenameError(null)
+                  }}
+                  style={({ pressed }) => [styles.renameCancelBtn, pressed && styles.pressedBg]}
+                >
+                  <Text style={styles.renameCancelText}>{strings.common.cancel}</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={strings.sessions.renameSession}
+                  disabled={renaming || !renameDraft.trim()}
+                  onPress={async () => {
+                    if (renaming || !renameDraft.trim() || !renameTarget) return
+                    const target = renameTarget
+                    setRenaming(true)
+                    setRenameError(null)
+                    try {
+                      const ok = await renameSession(target.sessionId, renameDraft.trim(), target.backend)
+                      if (ok) {
+                        setRenameTarget(null)
+                        setRenameError(null)
+                      } else {
+                        setRenameError(strings.sessions.renameFailed)
+                      }
+                    } finally {
+                      setRenaming(false)
+                    }
+                  }}
+                  style={({ pressed }) => [
+                    styles.renameConfirmBtn,
+                    (!renameDraft.trim() || renaming) && styles.btnDisabled,
+                    pressed && styles.pressedBg,
+                  ]}
+                >
+                  {renaming ? (
+                    <ActivityIndicator size="small" color={colors.surface} />
+                  ) : (
+                    <Text style={styles.renameConfirmText}>{strings.sessions.renameSession}</Text>
+                  )}
+                </Pressable>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
+        </Modal>
+      )}
+
+      {/* 轻量 Toast 提示 */}
+      {toastMessage && (
+        <View style={styles.toastContainer} pointerEvents="none">
+          <Text style={styles.toastText}>{toastMessage}</Text>
+        </View>
+      )}
 
       {/* 排序配置浮窗覆盖层：整层覆盖抽屉内容，遮罩与浮窗同级且顺序明确 */}
       {showConfigModal && (
@@ -633,6 +1605,152 @@ export function HostSessionsDrawer({
           {configPopover}
         </View>
       )}
+
+      {/* 切换 Harness 模态弹窗 */}
+      <Modal
+        visible={harnessPickerOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setHarnessPickerOpen(false)}
+        statusBarTranslucent
+      >
+        <View style={styles.harnessBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} accessibilityRole="button" accessibilityLabel={strings.common.close} onPress={() => setHarnessPickerOpen(false)} />
+          <View style={[styles.harnessDialog, { maxHeight: sheetMaxHeight }]} accessibilityViewIsModal>
+            <View style={styles.harnessHeader}>
+              <Text style={styles.harnessTitle} accessibilityRole="header">切换 Harness</Text>
+              <IconButton label={strings.common.close} icon={X} onPress={() => setHarnessPickerOpen(false)} />
+            </View>
+            <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.harnessList}>
+              <GroupCard>
+                {HARNESS_OPTIONS.filter(option => backends.includes(option.value)).map((option, index) => {
+                  const chosen = option.value === backend
+                  return (
+                    <GroupRow
+                      key={option.value}
+                      first={index === 0}
+                      label={option.name}
+                      detail={option.desc}
+                      selected={chosen}
+                      chevron={false}
+                      accessory={chosen ? <Check size={19} color={colors.primary} strokeWidth={2.2} /> : undefined}
+                      onPress={() => void handleSelectHarness(option.value)}
+                    />
+                  )
+                })}
+              </GroupCard>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* 工作区新建 / 管理 / 重命名弹窗 */}
+      <CreateWorkspaceModal
+        visible={createWorkspaceOpen}
+        codexAvailable={codexAvailable}
+        cursorAvailable={cursorAvailable}
+        antigravityAvailable={antigravityAvailable}
+        piAvailable={piAvailable}
+        opencodeAvailable={opencodeAvailable}
+        claudeAvailable={claudeAvailable}
+        hermesAvailable={hermesAvailable}
+        initialBackend={backend}
+        busy={
+          busy === 'create-workspace'
+          || busy === 'create-codex-workspace'
+          || busy === 'create-cursor-workspace'
+          || busy === 'create-antigravity-workspace'
+          || busy === 'create-pi-workspace'
+          || busy === 'create-opencode-workspace'
+          || busy === 'create-claude-workspace'
+          || busy === 'create-hermes-workspace'
+        }
+        onClose={() => setCreateWorkspaceOpen(false)}
+        onCreate={(path, targetBackend) => createWorkspace(path, targetBackend)}
+        onCreated={workspace => {
+          const expectedDeviceId = deviceId
+          if (useAppStore.getState().selectedDevice?.deviceId !== expectedDeviceId) return
+          const nextBackend = workspace.backend ?? 'harness'
+          setBackend(nextBackend)
+          if (expectedDeviceId !== undefined) void saveWorkspaceBackend(expectedDeviceId, nextBackend)
+          const groupId = `workspace:${nextBackend}:${workspace.workspaceId}`
+          if (expectedDeviceId !== undefined && groupScopeKey !== undefined) {
+            memoryGroupsByDevice[groupScopeKey] = { ...memoryGroupsByDevice[groupScopeKey], [groupId]: true }
+            setGroupsByDevice(current => ({
+              ...current,
+              [groupScopeKey]: { ...current[groupScopeKey], [groupId]: true },
+            }))
+            void saveHostSessionsDrawerGroup(expectedDeviceId, groupId, true).catch(() => undefined)
+          }
+          const latestSession = [...useAppStore.getState().sessions]
+            .filter(item => workspace.sessionIds.includes(item.sessionId) && !useAppStore.getState().archivedSessionIds.includes(item.sessionId))
+            .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0]
+          if (latestSession !== undefined) {
+            void onSelect(latestSession).then(() => {
+              if (useAppStore.getState().selectedDevice?.deviceId === expectedDeviceId) {
+                closeDrawer()
+              }
+            })
+            return
+          }
+          void createSession(workspace.workspaceId, nextBackend).then(ok => {
+            if (ok && useAppStore.getState().selectedDevice?.deviceId === expectedDeviceId) {
+              closeDrawer()
+            }
+          })
+        }}
+      />
+      <RenameWorkspaceModal
+        target={renameWorkspaceTarget}
+        busy={busy === 'rename-workspace'}
+        onClose={() => setRenameWorkspaceTarget(undefined)}
+        onRename={renameWorkspace}
+      />
+      <WorkspaceActionsModal
+        target={workspaceActionTarget}
+        favorited={actionTargetFavorited}
+        canMoveUp={actionTargetIndex > 0}
+        canMoveDown={actionTargetIndex >= 0 && actionTargetIndex < backendWorkspaces.length - 1}
+        busy={busy !== undefined}
+        onClose={() => setWorkspaceActionTarget(undefined)}
+        onNewSession={() => {
+          const target = workspaceActionTarget
+          setWorkspaceActionTarget(undefined)
+          if (target !== undefined) void handleCreateSessionInWorkspace(target)
+        }}
+        onToggleFavorite={() => {
+          const target = workspaceActionTarget
+          setWorkspaceActionTarget(undefined)
+          if (target !== undefined) void toggleFavoriteWorkspace(target)
+        }}
+        onRename={() => {
+          const target = workspaceActionTarget
+          setWorkspaceActionTarget(undefined)
+          setRenameWorkspaceTarget(target)
+        }}
+        onMoveUp={() => {
+          const target = workspaceActionTarget
+          const beforeId = actionTargetIndex > 0 ? backendWorkspaces[actionTargetIndex - 1]?.workspaceId : undefined
+          setWorkspaceActionTarget(undefined)
+          if (target !== undefined && beforeId !== undefined) void moveWorkspace(target.workspaceId, beforeId)
+        }}
+        onMoveDown={() => {
+          const target = workspaceActionTarget
+          const beforeId = actionTargetIndex >= 0 ? backendWorkspaces[actionTargetIndex + 2]?.workspaceId : undefined
+          setWorkspaceActionTarget(undefined)
+          if (target !== undefined && actionTargetIndex >= 0 && actionTargetIndex < backendWorkspaces.length - 1) {
+            void moveWorkspace(target.workspaceId, beforeId)
+          }
+        }}
+        onDelete={() => {
+          const target = workspaceActionTarget
+          setWorkspaceActionTarget(undefined)
+          if (target !== undefined) confirmDeleteWorkspace(target)
+        }}
+      />
+
+      {/* DS-Bot 弹窗宿主 (创建/编辑 Bot & 群聊、上下文菜单、用量/日程报表) */}
+      <BotModalsHost />
     </View>
   )
 
@@ -648,7 +1766,7 @@ export function HostSessionsDrawer({
         </Animated.View>
         <Animated.View
           accessibilityViewIsModal
-          {...panResponder.panHandlers}
+          {...drawerTouchProps}
           style={[styles.drawer, { paddingTop: insets.top, paddingBottom: insets.bottom, transform: [{ translateX }] }]}
         >
           {content}
@@ -662,119 +1780,247 @@ const createStyles = (colors: ThemeColors) =>
   StyleSheet.create({
     overlayContainer: { flex: 1 },
     overlay: { flex: 1, backgroundColor: colors.scrim },
-    drawer: { flex: 1, width: '85%', maxWidth: 360, backgroundColor: colors.surface },
-    inlineDrawer: { width: '100%', maxWidth: '100%', borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: colors.separator },
+    drawer: { flex: 1, width: '100%', maxWidth: '100%', backgroundColor: colors.background, overflow: 'hidden' },
+    inlineDrawer: { width: '100%', maxWidth: '100%', borderRadius: 0, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: colors.separator },
     container: { flex: 1 },
 
     brandHeader: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      paddingHorizontal: spacing.md,
-      paddingVertical: spacing.sm,
+      paddingLeft: spacing.lg,
+      paddingRight: spacing.md,
+      paddingTop: spacing.md,
+      paddingBottom: spacing.md,
     },
-    brandLeft: { flex: 1, minWidth: 0, marginRight: spacing.sm },
-    brandTitle: { ...type.heading, fontSize: 18, fontWeight: '700', color: colors.ink },
-    brandRight: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-    iconBtn: { padding: 6, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' },
-
-    newSessionWrapper: { paddingHorizontal: spacing.md, paddingVertical: spacing.xs },
-    newSessionBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: spacing.xs,
-      height: 38,
-      borderWidth: 1,
-      borderColor: colors.separator,
-      borderRadius: radius.sm,
-      backgroundColor: colors.surface,
-    },
-    newSessionText: { ...type.smallStrong, color: colors.ink },
+    brandLeft: { flex: 1, minWidth: 0, marginRight: spacing.sm, gap: 4 },
+    brandTitle: { ...type.heading, fontSize: 20, lineHeight: 26, fontWeight: '700', color: colors.ink },
+    brandRight: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+    iconBtn: { width: 36, height: 36, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center' },
+    iconBtnRound: { width: 36, height: 36, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.elevated, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.separator, ...floatingShadow(colors) },
 
     navItem: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: spacing.sm,
-      paddingHorizontal: spacing.md,
-      height: 36,
+      gap: 14,
+      paddingHorizontal: spacing.sm,
+      height: 50,
       marginHorizontal: spacing.xs,
-      borderRadius: radius.sm,
+      borderRadius: radius.lg,
     },
-    backendTab: {
+    navItemText: { ...type.body, fontSize: 17, color: colors.ink },
+    modeSwitcherWrap: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.surfaceStrong,
+      borderRadius: radius.pill,
+      padding: 3,
+      marginHorizontal: spacing.md,
+      marginBottom: spacing.sm,
+    },
+    modeSwitcherTab: {
+      flex: 1,
+      minHeight: 34,
+      flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
+      gap: 6,
+      borderRadius: radius.pill,
       paddingHorizontal: spacing.sm,
-      height: 36,
-      borderRadius: radius.sm,
     },
-    navItemText: { ...type.small, color: colors.ink },
+    modeSwitcherTabActive: {
+      backgroundColor: colors.surface,
+      ...floatingShadow(colors),
+    },
+    modeSwitcherText: {
+      ...type.smallStrong,
+      fontSize: 13.5,
+      color: colors.muted,
+    },
+    modeSwitcherTextActive: {
+      color: colors.primary,
+      fontWeight: '700',
+    },
+    navGroupWrap: {
+      paddingHorizontal: spacing.md,
+      marginBottom: spacing.xs,
+    },
+    favoritesWrap: {
+      paddingHorizontal: spacing.md,
+      paddingBottom: spacing.sm,
+      gap: 2,
+    },
 
     workspacesToolbarArea: { position: 'relative' },
     workspacesToolbar: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      paddingHorizontal: spacing.md,
+      paddingLeft: spacing.lg,
+      paddingRight: spacing.sm,
       paddingTop: spacing.md,
-      paddingBottom: spacing.xs,
+      paddingBottom: spacing.xxs,
     },
-    workspacesTitle: { ...type.caption, fontWeight: '600', color: colors.muted },
+    workspacesTitle: { ...type.small, fontSize: 15, color: colors.muted },
     toolbarActions: { flexDirection: 'row', alignItems: 'center', gap: 2 },
 
     searchContainer: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 6,
+      gap: spacing.xs,
       marginHorizontal: spacing.md,
       marginBottom: spacing.xs,
-      paddingHorizontal: spacing.sm,
-      height: 32,
-      borderWidth: 1,
-      borderColor: colors.separator,
-      borderRadius: radius.sm,
+      paddingHorizontal: spacing.md,
+      height: 42,
+      borderRadius: radius.pill,
       backgroundColor: colors.surfaceStrong,
     },
-    searchInput: { flex: 1, ...type.small, color: colors.ink, paddingVertical: 0 },
+    searchInput: { flex: 1, ...type.body, fontSize: 15, color: colors.ink, paddingVertical: 0 },
 
     listContainer: { paddingBottom: spacing.xl },
+
+    // 底部常驻栏：左侧当前远程主机状态/切换入口，右侧唯一设置圆钮
+    hostFooterBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.xs,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.separator,
+      backgroundColor: colors.background,
+      paddingLeft: spacing.xs,
+      paddingRight: spacing.md,
+      paddingVertical: 10,
+    },
+    hostFooterLeft: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 14,
+      flex: 1,
+      minWidth: 0,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 6,
+      borderRadius: radius.lg,
+    },
+    hostFooterIcon: { width: 20, alignItems: 'center', justifyContent: 'center' },
+    hostFooterInfo: { flex: 1, minWidth: 0, gap: 2 },
+    hostFooterNameRow: { flexDirection: 'row', alignItems: 'center', gap: 4, minWidth: 0 },
+    hostFooterName: { ...type.bodyStrong, fontSize: 15, lineHeight: 20, color: colors.ink, flexShrink: 1 },
+    hostFooterStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    hostFooterDot: { width: 6, height: 6, borderRadius: 3 },
+    hostFooterStatusText: { ...type.caption, color: colors.muted },
+    sectionList: { flex: 1 },
 
     workspaceRow: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
       paddingHorizontal: spacing.md,
-      height: 34,
-      borderRadius: radius.sm,
+      minHeight: 48,
+      marginHorizontal: spacing.md,
+      marginTop: spacing.xs,
+      backgroundColor: colors.card,
+      borderColor: colors.separator,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderLeftWidth: StyleSheet.hairlineWidth,
+      borderRightWidth: StyleSheet.hairlineWidth,
     },
-    workspaceRowLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, flex: 1 },
-    workspaceRowTitle: { ...type.smallStrong, color: colors.ink, flex: 1 },
+    workspaceRowCardSingle: {
+      borderRadius: radius.xl,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+    },
+    workspaceRowCardTop: {
+      borderTopLeftRadius: radius.xl,
+      borderTopRightRadius: radius.xl,
+    },
+    workspaceRowLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flex: 1, minWidth: 0 },
+    workspaceRowTitle: { ...type.bodyStrong, fontSize: 15, color: colors.ink, flexShrink: 1 },
+    workspaceCountText: {
+      ...type.caption,
+      fontSize: 12,
+      color: colors.muted,
+      backgroundColor: colors.surfaceStrong,
+      paddingHorizontal: 6,
+      paddingVertical: 1,
+      borderRadius: radius.pill,
+    },
+    workspaceRowRight: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 2,
+      flexShrink: 0,
+    },
+    workspaceSmallBtn: {
+      width: 28,
+      height: 28,
+      borderRadius: radius.pill,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
 
     sessionRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      paddingLeft: spacing.lg + spacing.xs,
-      paddingRight: spacing.md,
-      height: 34,
-      borderRadius: radius.sm,
-      marginHorizontal: spacing.xs,
+      paddingLeft: spacing.md,
+      paddingRight: spacing.xxs,
+      minHeight: 46,
+      marginHorizontal: spacing.md,
+      backgroundColor: colors.card,
+      borderColor: colors.separator,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderLeftWidth: StyleSheet.hairlineWidth,
+      borderRightWidth: StyleSheet.hairlineWidth,
     },
-    sessionRowSelected: { backgroundColor: colors.surfaceStrong },
-    statusIndicatorSlot: { width: 12, alignItems: 'flex-start', justifyContent: 'center' },
-    runningDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#10B981' },
-    sessionText: { ...type.small, color: colors.ink, flex: 1, marginRight: spacing.xs },
-    sessionTextSelected: { fontWeight: '600' },
-    timeText: { ...type.caption, color: colors.muted, fontSize: 11 },
+    sessionRowCardTop: {
+      marginTop: spacing.xs,
+      borderTopLeftRadius: radius.xl,
+      borderTopRightRadius: radius.xl,
+    },
+    sessionRowCardBottom: {
+      borderBottomLeftRadius: radius.xl,
+      borderBottomRightRadius: radius.xl,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+    },
+    sessionRowSelected: { backgroundColor: colors.primarySoft },
+    sessionRowDragging: {
+      backgroundColor: colors.surfaceStrong,
+      borderRadius: radius.lg,
+      borderWidth: 1,
+      borderColor: colors.primary,
+      opacity: 0.9,
+    },
+    dropTargetAbove: {
+      borderTopWidth: 2,
+      borderTopColor: colors.primary,
+    },
+    dropTargetBelow: {
+      borderBottomWidth: 2,
+      borderBottomColor: colors.primary,
+    },
+    statusIndicatorSlot: { width: 14, alignItems: 'flex-start', justifyContent: 'center' },
+    runningDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.success },
+    sessionText: { ...type.body, fontSize: 15, color: colors.ink, flex: 1, marginRight: spacing.xs },
+    sessionTextSelected: { fontWeight: '600', color: colors.primary },
+    timeText: { ...type.caption, color: colors.subtle },
 
     showMoreRow: {
-      paddingLeft: spacing.lg + spacing.md,
+      paddingLeft: spacing.md + 14,
       paddingVertical: spacing.xs,
-      height: 30,
+      minHeight: 38,
       justifyContent: 'center',
+      marginHorizontal: spacing.md,
+      backgroundColor: colors.card,
+      borderColor: colors.separator,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderLeftWidth: StyleSheet.hairlineWidth,
+      borderRightWidth: StyleSheet.hairlineWidth,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomLeftRadius: radius.xl,
+      borderBottomRightRadius: radius.xl,
     },
-    showMoreText: { ...type.caption, color: colors.muted },
+    showMoreText: { ...type.caption, color: colors.primary, fontWeight: '500' },
 
-    pressedBg: { opacity: 0.7, backgroundColor: colors.surfaceStrong },
+    pressedBg: { backgroundColor: colors.surfaceStrong },
+    pressedFade: { opacity: 0.72 },
 
     // 浮窗覆盖层：铺满抽屉内容区，作为唯一命中层，避免跨父级层级问题
     popoverLayer: {
@@ -786,15 +2032,11 @@ const createStyles = (colors: ThemeColors) =>
       position: 'absolute',
       width: 220,
       backgroundColor: colors.surface,
-      borderRadius: radius.sm,
-      padding: spacing.sm,
-      borderWidth: 1,
+      borderRadius: radius.xl,
+      padding: spacing.md,
+      borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.separator,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.15,
-      shadowRadius: 8,
-      elevation: 8,
+      ...floatingShadow(colors, 'high'),
       zIndex: 1000,
     },
     modalSectionLabel: { ...type.caption, color: colors.muted, marginBottom: 4, fontWeight: '600' },
@@ -807,4 +2049,221 @@ const createStyles = (colors: ThemeColors) =>
     },
     modalItemText: { ...type.small, color: colors.ink },
     modalDivider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.separator, marginVertical: 6 },
+
+    archivedText: { color: colors.muted, fontStyle: 'italic' },
+    pinIndicator: { marginLeft: 4, marginRight: 2, alignItems: 'center', justifyContent: 'center' },
+    moreActionBtn: {
+      minWidth: 44,
+      minHeight: 44,
+      paddingHorizontal: 8,
+      marginLeft: 2,
+      borderRadius: 22,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+
+    menuBackdrop: {
+      flex: 1,
+      backgroundColor: colors.modalBackdrop,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: spacing.md,
+    },
+    contextMenuCard: {
+      width: '80%',
+      maxWidth: 280,
+      backgroundColor: colors.surface,
+      borderRadius: radius.xl,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.separator,
+      paddingVertical: spacing.xs,
+      ...floatingShadow(colors, 'high'),
+    },
+    menuHeader: {
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.separator,
+      marginBottom: spacing.xxs,
+    },
+    menuTitle: {
+      ...type.caption,
+      fontWeight: '600',
+      color: colors.muted,
+    },
+    menuItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      minHeight: 48,
+      paddingHorizontal: spacing.lg,
+      gap: spacing.md,
+    },
+    menuItemText: {
+      ...type.body,
+      color: colors.ink,
+      flex: 1,
+    },
+
+    renameBackdrop: {
+      flex: 1,
+      backgroundColor: colors.modalBackdrop,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: spacing.md,
+    },
+    renameCard: {
+      width: '85%',
+      maxWidth: 340,
+      backgroundColor: colors.surface,
+      borderRadius: radius.xl,
+      padding: spacing.lg,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.separator,
+      ...floatingShadow(colors, 'high'),
+    },
+    renameModalTitle: {
+      ...type.heading,
+      color: colors.ink,
+      fontWeight: '600',
+    },
+    renameInput: {
+      borderRadius: radius.lg,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      marginVertical: spacing.md,
+      ...type.body,
+      color: colors.ink,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    renameErrorText: {
+      ...type.caption,
+      color: colors.ink,
+      fontWeight: '600',
+      marginBottom: spacing.sm,
+    },
+    renameButtonRow: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      gap: spacing.sm,
+    },
+    renameCancelBtn: {
+      paddingVertical: 10,
+      paddingHorizontal: spacing.lg,
+      borderRadius: radius.pill,
+      backgroundColor: colors.surfaceStrong,
+    },
+    renameCancelText: {
+      ...type.small,
+      color: colors.ink,
+    },
+    renameConfirmBtn: {
+      paddingVertical: 10,
+      paddingHorizontal: spacing.lg,
+      borderRadius: radius.pill,
+      backgroundColor: colors.primary,
+    },
+    renameConfirmText: {
+      ...type.small,
+      color: colors.white,
+      fontWeight: '600',
+    },
+    btnDisabled: {
+      opacity: 0.5,
+    },
+
+    toastContainer: {
+      position: 'absolute',
+      bottom: 60,
+      alignSelf: 'center',
+      backgroundColor: colors.inverse,
+      paddingVertical: 10,
+      paddingHorizontal: 18,
+      borderRadius: radius.pill,
+      zIndex: 9999,
+      elevation: 9999,
+    },
+    toastText: {
+      ...type.small,
+      color: colors.onInverse,
+      fontWeight: '500',
+    },
+    harnessLabel: {
+      flex: 1,
+    },
+    harnessTrailing: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      flexShrink: 0,
+    },
+    harnessTrailingText: {
+      ...type.small,
+      fontSize: 13,
+      lineHeight: 18,
+      color: colors.muted,
+      maxWidth: 100,
+    },
+    harnessBackdrop: {
+      flex: 1,
+      backgroundColor: colors.modalBackdrop,
+      justifyContent: 'flex-end',
+    },
+    harnessDialog: {
+      backgroundColor: colors.background,
+      borderTopLeftRadius: radius.xxl,
+      borderTopRightRadius: radius.xxl,
+      paddingHorizontal: spacing.lg,
+      paddingTop: spacing.md,
+      paddingBottom: spacing.xxl,
+      gap: spacing.md,
+      ...floatingShadow(colors, 'high'),
+    },
+    harnessHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingLeft: spacing.xs,
+    },
+    harnessTitle: {
+      ...type.heading,
+      fontSize: 18,
+      color: colors.ink,
+      fontWeight: '700',
+    },
+    harnessList: {
+      paddingBottom: spacing.md,
+    },
+    harnessOptionRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.md,
+    },
+    harnessOptionDivider: {
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.separator,
+    },
+    harnessOptionInfo: {
+      flex: 1,
+      gap: 2,
+      marginRight: spacing.sm,
+    },
+    harnessOptionName: {
+      ...type.body,
+      fontSize: 16,
+      color: colors.ink,
+    },
+    harnessOptionNameActive: {
+      fontWeight: '600',
+      color: colors.primary,
+    },
+    harnessOptionDesc: {
+      ...type.small,
+      fontSize: 13,
+      lineHeight: 18,
+      color: colors.muted,
+    },
   })

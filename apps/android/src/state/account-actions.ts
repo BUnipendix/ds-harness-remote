@@ -210,8 +210,9 @@ export function createAccountActions({ set, get }: StoreAccess): AccountActions 
         const identity = get().identity
         if (identity === undefined) throw new Error(zhCN.runtime.identityNotReady)
         const context = await loginFlow.createContext(input, identity)
+        const url = await loginFlow.prepareRedirect(oauthLoginChannel, context)
         set({ pendingOAuthBaseUrl: context.baseUrl, pendingOAuthLoginMethod: 'oauth', busyAction: undefined })
-        return await loginFlow.prepareRedirect(oauthLoginChannel, context)
+        return url
       } catch (error) {
         set({ busyAction: undefined, error: friendlyError(error) })
         return undefined
@@ -224,12 +225,13 @@ export function createAccountActions({ set, get }: StoreAccess): AccountActions 
         const identity = get().identity
         if (identity === undefined) throw new Error(zhCN.runtime.identityNotReady)
         const context = await loginFlow.createContext(input, identity)
+        const url = await loginFlow.prepareRedirect(githubOAuthLoginChannel, context)
         set({
           pendingOAuthBaseUrl: context.baseUrl,
           pendingOAuthLoginMethod: 'github-oauth',
           busyAction: undefined,
         })
-        return await loginFlow.prepareRedirect(githubOAuthLoginChannel, context)
+        return url
       } catch (error) {
         set({ busyAction: undefined, error: friendlyError(error) })
         return undefined
@@ -242,12 +244,13 @@ export function createAccountActions({ set, get }: StoreAccess): AccountActions 
         const identity = get().identity
         if (identity === undefined) throw new Error(zhCN.runtime.identityNotReady)
         const context = await loginFlow.createContext(input, identity)
+        const url = await loginFlow.prepareRedirect(googleOAuthLoginChannel, context)
         set({
           pendingOAuthBaseUrl: context.baseUrl,
           pendingOAuthLoginMethod: 'google-oauth',
           busyAction: undefined,
         })
-        return await loginFlow.prepareRedirect(googleOAuthLoginChannel, context)
+        return url
       } catch (error) {
         set({ busyAction: undefined, error: friendlyError(error) })
         return undefined
@@ -259,10 +262,9 @@ export function createAccountActions({ set, get }: StoreAccess): AccountActions 
       const loginMethod = get().pendingOAuthLoginMethod
       const channel = redirectLoginChannelFor(loginMethod)
       if (baseUrl === undefined || token.length < 16) {
-        set({ pendingOAuthBaseUrl: undefined, pendingOAuthLoginMethod: undefined })
+        set({ pendingOAuthBaseUrl: undefined, pendingOAuthLoginMethod: undefined, busyAction: undefined })
         return false
       }
-      set({ pendingOAuthBaseUrl: undefined, pendingOAuthLoginMethod: undefined })
       set({ busyAction: channel.completeBusyAction, error: undefined })
       try {
         const identity = get().identity
@@ -271,7 +273,7 @@ export function createAccountActions({ set, get }: StoreAccess): AccountActions 
         const outcome = await loginFlow.completeRedirect(channel, context, token)
         return await finalizeLogin(set, context.baseUrl, outcome)
       } catch (error) {
-        set({ busyAction: undefined, error: friendlyError(error) })
+        set({ pendingOAuthBaseUrl: undefined, pendingOAuthLoginMethod: undefined, busyAction: undefined, error: friendlyError(error) })
         return false
       }
     },

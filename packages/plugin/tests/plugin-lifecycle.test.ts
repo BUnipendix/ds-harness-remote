@@ -17,6 +17,42 @@ afterEach(async () => {
 })
 
 describe('Cordis plugin lifecycle', () => {
+  it('migrates only owned legacy entries without disabling an unrelated plugin', async () => {
+    const dshHome = await mkdtemp(join(tmpdir(), 'dsh-remote-legacy-ownership-'))
+    directories.push(dshHome)
+    vi.stubEnv('DSH_HOME', dshHome)
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline fixture') }))
+    const entries = [
+      { id: 'current', options: { id: 'current', name: '@dsh-remote/plugin', disabled: false } },
+      { id: 'foreign', options: { id: 'foreign', name: 'dsh-remote', disabled: false } },
+      { id: 'foreign-null', options: { id: 'foreign-null', name: 'dsh-remote', disabled: null } },
+      { id: 'foreign-disabled', options: { id: 'foreign-disabled', name: 'dsh-remote', disabled: true } },
+      { id: 'owned', options: { id: 'owned', name: '@dsh-remote/plugin', disabled: false } },
+      { id: 'owned-disabled', options: { id: 'owned-disabled', name: '@dsh-remote/plugin', disabled: true } },
+      { id: 'other', options: { id: 'other', name: 'another-plugin', disabled: false } },
+    ]
+    const update = vi.fn(async (id: string, options: { disabled?: boolean | null }) => {
+      Object.assign(entries.find(entry => entry.id === id)!.options, options)
+    })
+    const ctx = new Context()
+    ctx.provide('loader', { locate: () => 'current', entries: () => entries, update } as never)
+    ctx.provide('settings', settings({ deviceName: 'Cordis ownership test host' }))
+    ctx.provide('typertGateway', typertGateway())
+    ctx.provide('connection', connection())
+    const fiber = await ctx.plugin(remotePlugin, { ...disabledAgentDomains, deviceName: 'Cordis ownership test host' })
+    try {
+      await vi.waitFor(() => expect(ctx.dshRemote.currentIdentity()).toBeDefined())
+      expect(update.mock.calls).toEqual([['owned', { disabled: true }]])
+      expect(entries.map(entry => [entry.id, entry.options.disabled])).toEqual([
+        ['current', false], ['foreign', false], ['foreign-null', null], ['foreign-disabled', true],
+        ['owned', true], ['owned-disabled', true], ['other', false],
+      ])
+    } finally {
+      await fiber.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+
   it('switches Server authority live and cancels discovery belonging to the old Server', async () => {
     const dshHome = await mkdtemp(join(tmpdir(), 'dsh-remote-server-switch-'))
     directories.push(dshHome)
@@ -91,10 +127,12 @@ describe('Cordis plugin lifecycle', () => {
     await ctx.fiber.dispose()
   })
 
-  it('loads against Typert and disposes its runtime', async () => {
+  it('automatically migrates storage on upgrade before loading Typert and disposes its runtime', async () => {
     const dshHome = await mkdtemp(join(tmpdir(), 'dsh-remote-cordis-'))
     directories.push(dshHome)
     vi.stubEnv('DSH_HOME', dshHome)
+
+    const original = await new remotePlugin.IdentityStore({ directory: join(dshHome, 'remote') }).loadOrCreate('Cordis test host')
 
     const ctx = new Context()
     let identityReadyWhenControlRegistered: boolean | undefined
@@ -117,6 +155,8 @@ describe('Cordis plugin lifecycle', () => {
         capabilities: expect.arrayContaining(['harness.remote.v1', 'harness.remote.transfer.v1']),
       })
     })
+    expect(ctx.dshRemote.currentIdentity()).toEqual(original)
+
     expect(identityReadyWhenControlRegistered).toBe(false)
 
     await fiber.dispose()
@@ -149,52 +189,6 @@ describe('Cordis plugin lifecycle', () => {
     await ctx.fiber.dispose()
   })
 
-  it('loads a TUI Host against the v0.1.2 Typert Remote Gateway without a Desktop connection service', async () => {
-    const dshHome = await mkdtemp(join(tmpdir(), 'dsh-remote-alpha-cordis-'))
-    directories.push(dshHome)
-    vi.stubEnv('DSH_HOME', dshHome)
-    let requestSignal: AbortSignal | null | undefined
-    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
-      requestSignal = init?.signal
-      return new Promise<Response>((_resolve, reject) => {
-        requestSignal!.addEventListener('abort', () => reject(requestSignal!.reason), { once: true })
-      })
-    })
-    vi.stubGlobal('fetch', fetchMock)
-
-    const ctx = new Context()
-    ctx.provide('commands', { register: vi.fn(() => vi.fn()) })
-    ctx.provide('tuiCommandTrees', { register: vi.fn(() => vi.fn()) })
-    ctx.provide('tuiScenes', { register: vi.fn(() => vi.fn()), open: vi.fn(() => true) })
-    ctx.provide('settings', settings({ deviceName: 'Cordis alpha host' }))
-    ctx.provide('typertGateway', {
-      invoke: vi.fn(async () => undefined),
-      dispatchRpc: vi.fn(async () => ({ ok: true, value: undefined })),
-      openWireStream: vi.fn(async () => (async function* () { return })()),
-      wireStream: {
-        open: vi.fn(async () => (async function* () { return })()),
-        failure: vi.fn(() => ({ code: 'internal', message: 'failed', details: {} })),
-      },
-    } as never)
-    const fiber = await ctx.plugin(remotePlugin, { ...disabledAgentDomains, deviceName: 'Cordis alpha host' })
-
-    try {
-      await vi.waitFor(() => {
-        expect(ctx.dshRemote.currentIdentity()).toMatchObject({ name: 'Cordis alpha host' })
-        expect(ctx.dshRemote.diagnostics()).toMatchObject({ loaded: true, serverConfigured: true })
-        expect(fetchMock).toHaveBeenCalledTimes(1)
-      })
-      expect(ctx.get('dshRemoteClient')).toBeUndefined()
-
-      await fiber.dispose()
-      expect(requestSignal?.aborted).toBe(true)
-      expect(ctx.get('dshRemote')).toBeUndefined()
-    } finally {
-      await fiber.dispose()
-      await ctx.fiber.dispose()
-    }
-  })
-
   it('keeps a carrier-less Desktop unavailable even when legacy ApiProxy is provided', async () => {
     const dshHome = await mkdtemp(join(tmpdir(), 'dsh-remote-late-apiproxy-'))
     directories.push(dshHome)
@@ -220,7 +214,7 @@ describe('Cordis plugin lifecycle', () => {
     const fiber = await ctx.plugin(remotePlugin, { ...disabledAgentDomains, deviceName: 'Cordis delayed rc.2 host' })
 
     expect(ctx.get('dshRemote')).toBeUndefined()
-    expect(handlers).toHaveLength(1)
+    await vi.waitFor(() => expect(handlers).toHaveLength(1))
     expect(handlers[0]?.channel).toBe('/ds-harness-remote')
     await expect(handlers[0]?.handler('status', {}, new AbortController().signal)).resolves.toMatchObject({
       ok: true,

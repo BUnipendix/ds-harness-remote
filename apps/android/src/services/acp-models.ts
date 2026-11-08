@@ -1,10 +1,10 @@
 import type { AgentAcpClient } from '@dsh-remote/client-core'
 import type { ModelSelection, SessionModels } from '../types'
 
-type ModelBackend = 'cursor' | 'claude' | 'pi' | 'opencode' | 'antigravity'
+type ModelBackend = 'cursor' | 'claude' | 'pi' | 'opencode' | 'antigravity' | 'hermes'
 
 export async function loadAcpModels(client: AgentAcpClient, sessionId: string, backend: ModelBackend): Promise<SessionModels> {
-  const result = await client.sessionModels(sessionId, backend)
+  const result = await client.sessionModels(sessionId, backend as Parameters<AgentAcpClient['sessionModels']>[1])
   if (!record(result) || !record(result.current) || result.current.provider !== backend
     || typeof result.current.model !== 'string' || !Array.isArray(result.groups)) throw new Error('Invalid ACP model catalog.')
   const groups = result.groups.flatMap(group => {
@@ -18,7 +18,7 @@ export async function loadAcpModels(client: AgentAcpClient, sessionId: string, b
         : undefined
       return [{ id: model.id, name: model.name, ...(reasoning === undefined ? {} : { reasoning }) }]
     })
-    return [{ id: backend, name: typeof group.name === 'string' ? group.name : { cursor: 'Cursor', claude: 'Claude', pi: 'Pi', opencode: 'OpenCode', antigravity: 'Antigravity' }[backend], models }]
+    return [{ id: backend, name: typeof group.name === 'string' ? group.name : { cursor: 'Cursor', claude: 'Claude', pi: 'Pi', opencode: 'OpenCode', antigravity: 'Antigravity', hermes: 'Hermes' }[backend], models }]
   })
   return { current: { provider: backend, model: result.current.model,
     ...(typeof result.current.reasoningEffort === 'string' ? { reasoningEffort: result.current.reasoningEffort } : {}) },
@@ -27,7 +27,7 @@ export async function loadAcpModels(client: AgentAcpClient, sessionId: string, b
 
 export async function selectAcpModel(client: AgentAcpClient, sessionId: string, backend: ModelBackend, selection: ModelSelection): Promise<SessionModels> {
   if (selection.provider !== backend) throw new Error('Invalid ACP model provider.')
-  await client.selectModel(sessionId, backend, selection)
+  await client.selectModel(sessionId, backend as Parameters<AgentAcpClient['selectModel']>[1], selection)
   // Re-read the authoritative selection; never fabricate a successful mode switch.
   return loadAcpModels(client, sessionId, backend)
 }

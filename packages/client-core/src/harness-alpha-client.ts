@@ -80,6 +80,7 @@ export interface HarnessWorkspaceView {
 export interface HarnessWorkspaceList {
   items: HarnessWorkspaceView[]
   archivedSessionIds: string[]
+  pinnedSessionIds?: string[]
 }
 
 export type ScheduleKind = 'after' | 'at' | 'every' | 'daily' | 'weekly' | 'cron'
@@ -116,6 +117,46 @@ export interface ScheduleDeleteResult {
   deleted?: boolean
   code?: string
 }
+
+export interface ScheduleCreateRequest {
+  title: string
+  prompt: string
+  after_seconds?: number
+  at?: string | { date: string; time: string; time_zone: string }
+  every_seconds?: number
+  daily?: { time: string; time_zone: string }
+  weekly?: { time: string; time_zone: string; weekdays: number[] }
+  cron?: { expression: string; time_zone: string }
+}
+
+export type ScheduleTimingChange =
+  | { kind: 'at'; at: string | { date: string; time: string; time_zone: string } }
+  | { kind: 'every'; every_seconds: number }
+  | { kind: 'daily'; daily: { time: string; time_zone: string } }
+  | { kind: 'weekly'; weekly: { time: string; time_zone: string; weekdays: number[] } }
+  | { kind: 'cron'; cron: { expression: string; time_zone: string } }
+
+export type ScheduleRecord =
+  | { id: string; kind: 'after'; title: string; prompt: string; afterSeconds: number; scheduledAt: string }
+  | { id: string; kind: 'at'; title: string; prompt: string; scheduledAt: string }
+  | { id: string; kind: 'every'; title: string; prompt: string; everySeconds: number; scheduledAt: string }
+  | { id: string; kind: 'daily'; title: string; prompt: string; time: string; timeZone: string; scheduledAt: string }
+  | { id: string; kind: 'weekly'; title: string; prompt: string; time: string; timeZone: string; weekdays: number[]; scheduledAt: string }
+  | { id: string; kind: 'cron'; title: string; prompt: string; expression: string; timeZone: string; scheduledAt: string }
+
+export interface ScheduleUpdateRequest {
+  sessionId: string
+  id: string
+  expected: ScheduleRecord
+  change?: ScheduleTimingChange
+  title?: string
+  prompt?: string
+}
+
+export type ScheduleUpdateResult =
+  | { id: string; updated: boolean; record: ScheduleRecord }
+  | { id: string; updated: false; code: 'schedule_not_found' | 'schedule_ended' | 'schedule_conflict' }
+  | { code: string; message: string }
 
 export interface ScheduleDeliveryHistoryResult {
   id: string
@@ -328,9 +369,10 @@ export class HarnessAlphaClient {
     return saved
   }
 
-  async sessionFork(sessionId: string, atSeq: number): Promise<{ sessionId: string }> {
-    if (!Number.isSafeInteger(atSeq) || atSeq < 0) throw new RemoteGatewayError('INVALID_MESSAGE', 'Invalid fork boundary.')
-    const result = await this.callValue<{ sessionId: string }>('session/fork', { request: { sessionId, atSeq } })
+  async sessionFork(sessionId: string, atSeq?: number): Promise<{ sessionId: string }> {
+    if (atSeq !== undefined && (!Number.isSafeInteger(atSeq) || atSeq < 0)) throw new RemoteGatewayError('INVALID_MESSAGE', 'Invalid fork boundary.')
+    const request = atSeq === undefined ? { sessionId } : { sessionId, atSeq }
+    const result = await this.callValue<{ sessionId: string }>('session/fork', { request })
     if (typeof result?.sessionId !== 'string' || result.sessionId.length === 0) throw new RemoteGatewayError('INVALID_MESSAGE', 'Invalid fork result.')
     return result
   }
@@ -521,12 +563,23 @@ export class HarnessAlphaClient {
     if (result.accepted !== true) throw new RemoteGatewayError('INVALID_MESSAGE', 'The Host did not accept the stop request.')
   }
 
-  async sessionAttachment(sessionId: string, attachmentId: string): Promise<{ attachment: unknown; data: string }> {
+  async sessionAttachment(
+    sessionId: string,
+    attachment: string | Record<string, unknown>,
+  ): Promise<{ attachment: unknown; data: string }> {
+    const reference = typeof attachment === 'string' ? undefined : attachment
+    const attachmentId = typeof attachment === 'string'
+      ? attachment
+      : typeof attachment.attachmentId === 'string' ? attachment.attachmentId : undefined
     const result = await this.callValue<{ attachment?: unknown; data?: string; mediaType?: string }>('session/attachment', {
-      request: { sessionId, attachmentId },
+      request: {
+        sessionId,
+        ...(attachmentId === undefined ? {} : { attachmentId }),
+        ...(reference === undefined ? {} : { attachment: reference }),
+      },
     })
     return {
-      attachment: result.attachment ?? { mediaType: result.mediaType },
+      attachment: result.attachment ?? reference ?? { mediaType: result.mediaType },
       data: result.data ?? '',
     }
   }
@@ -590,9 +643,32 @@ export class HarnessAlphaClient {
     await this.callValue('workspace/delete', { request: { workspaceId } })
   }
 
-  async workspaceArchiveSession(sessionId: string): Promise<string[]> {
-    const result = await this.callValue<{ archivedSessionIds: string[] }>('workspace/archiveSession', { request: { sessionId } })
+  async workspaceArchiveSession(sessionId: string, options?: { stopActivity?: boolean }): Promise<string[]> {
+    const request: { sessionId: string; stopActivity?: boolean } = {
+      sessionId,
+      stopActivity: options?.stopActivity ?? true,
+    }
+    const result = await this.callValue<{ archivedSessionIds: string[] }>('workspace/archiveSession', { request })
     return Array.isArray(result.archivedSessionIds) ? result.archivedSessionIds : []
+  }
+
+  async workspaceUnarchiveSession(sessionId: string): Promise<string[]> {
+    const result = await this.callValue<{ archivedSessionIds: string[] }>('workspace/unarchiveSession', { request: { sessionId } })
+    return Array.isArray(result.archivedSessionIds) ? result.archivedSessionIds : []
+  }
+
+  async workspacePinSession(sessionId: string): Promise<string[]> {
+    const result = await this.callValue<{ pinnedSessionIds: string[] }>('workspace/pinSession', { request: { sessionId } })
+    return Array.isArray(result.pinnedSessionIds) ? result.pinnedSessionIds : []
+  }
+
+  async workspaceUnpinSession(sessionId: string): Promise<string[]> {
+    const result = await this.callValue<{ pinnedSessionIds: string[] }>('workspace/unpinSession', { request: { sessionId } })
+    return Array.isArray(result.pinnedSessionIds) ? result.pinnedSessionIds : []
+  }
+
+  async sessionRename(sessionId: string, title: string): Promise<{ title: string; seq: number }> {
+    return this.callValue<{ title: string; seq: number }>('session/rename', { request: { sessionId, title } })
   }
 
   async workspaceInsertBefore(workspaceId: string, beforeWorkspaceId?: string): Promise<string[]> {
@@ -607,11 +683,37 @@ export class HarnessAlphaClient {
 
   async scheduleCatalog(): Promise<ScheduleCatalogEntry[]> {
     const result = await this.callValue<ScheduleCatalogEntry[] | { items: ScheduleCatalogEntry[] }>('schedule/catalog', {})
-    if (Array.isArray(result)) return result
-    if (result && Array.isArray((result as { items?: ScheduleCatalogEntry[] }).items)) {
-      return (result as { items: ScheduleCatalogEntry[] }).items
+    const list = Array.isArray(result)
+      ? result
+      : result && Array.isArray((result as { items?: ScheduleCatalogEntry[] }).items)
+        ? (result as { items: ScheduleCatalogEntry[] }).items
+        : null
+    if (list === null) {
+      throw new RemoteGatewayError('INVALID_MESSAGE', 'The Host returned an invalid schedule catalog payload.')
     }
-    throw new RemoteGatewayError('INVALID_MESSAGE', 'The Host returned an invalid schedule catalog payload.')
+    return list.map(entry => {
+      if (typeof entry.sessionId === 'string' && entry.sessionId.length > 0) return entry
+      const target = (entry as unknown as Record<string, unknown>).target
+      if (target && typeof target === 'object' && !Array.isArray(target)) {
+        const targetObj = target as Record<string, unknown>
+        if (targetObj.kind === 'session' && typeof targetObj.sessionId === 'string' && targetObj.sessionId.length > 0) {
+          return { ...entry, sessionId: targetObj.sessionId }
+        }
+      }
+      return entry
+    })
+  }
+
+  async scheduleCreate(sessionId: string, request: ScheduleCreateRequest): Promise<ScheduleRecord> {
+    return this.callValue<ScheduleRecord>('schedule/create', {
+      request: { sessionId, ...request },
+    })
+  }
+
+  async scheduleUpdate(request: ScheduleUpdateRequest): Promise<ScheduleUpdateResult> {
+    return this.callValue<ScheduleUpdateResult>('schedule/update', {
+      request,
+    })
   }
 
   async scheduleDelete(sessionId: string, id: string): Promise<ScheduleDeleteResult> {
@@ -1021,6 +1123,9 @@ function normalizeWorkspaceList(value: Record<string, unknown>): HarnessWorkspac
       : [],
     archivedSessionIds: Array.isArray(value.archivedSessionIds)
       ? value.archivedSessionIds.filter((item): item is string => typeof item === 'string')
+      : [],
+    pinnedSessionIds: Array.isArray(value.pinnedSessionIds)
+      ? value.pinnedSessionIds.filter((item): item is string => typeof item === 'string')
       : [],
   }
 }

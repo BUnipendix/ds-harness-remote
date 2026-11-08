@@ -31,6 +31,8 @@ function config(requireVerifiedPeer: boolean): ResolvedConfig {
     serverUrl: 'https://remote.test',
     deviceName: 'Host',
     forceRelay: true,
+    rotatePinnedPeerKey: false,
+    sidebar: { entry: 'standard' },
     identity: { requireVerifiedPeer },
     logLevel: 'error',
     reconnect: { enabled: false, initialDelayMs: 100, maxDelayMs: 1_000, jitter: 0 },

@@ -11,6 +11,7 @@ import type {
   CodexPermissionPreset,
   HistoryEntry,
   ModelCatalogModel,
+  ModelSelection,
   ModelReasoningEffort,
   NativeSessionEvent,
   RemoteSession,
@@ -150,7 +151,7 @@ export async function readCodexHistoryPage(
   }
 }
 
-export async function loadCodexModels(client: CodexRemoteClient): Promise<SessionModels> {
+export async function loadCodexModels(client: CodexRemoteClient, current?: ModelSelection): Promise<SessionModels> {
   const models: ModelCatalogModel[] = []
   let defaultModel: string | undefined
   let cursor: string | undefined
@@ -197,16 +198,21 @@ export async function loadCodexModels(client: CodexRemoteClient): Promise<Sessio
     cursor = string(result.nextCursor)
     if (cursor === undefined) break
   }
-  const selected = models.find(model => model.id === defaultModel) ?? models[0]
-  if (selected === undefined) throw new Error(strings.runtime.codexInvalidResponse)
+  const selected = current?.provider === CODEX_PROVIDER
+    ? models.find(model => model.id === current.model)
+    : undefined
+  const fallback = selected ?? models.find(model => model.id === defaultModel) ?? models[0]
+  if (fallback === undefined) throw new Error(strings.runtime.codexInvalidResponse)
   return {
     current: {
       provider: CODEX_PROVIDER,
-      model: selected.id,
-      ...(selected.reasoning?.defaultEffort === undefined ? {} : { reasoningEffort: selected.reasoning.defaultEffort }),
+      model: fallback.id,
+      ...(current?.provider === CODEX_PROVIDER && current.model === fallback.id && current.reasoningEffort !== undefined
+        ? { reasoningEffort: current.reasoningEffort }
+        : fallback.reasoning?.defaultEffort === undefined ? {} : { reasoningEffort: fallback.reasoning.defaultEffort }),
     },
     routable: true,
-    groups: [{ id: CODEX_PROVIDER, name: 'CodeX', models }],
+    groups: [{ id: CODEX_PROVIDER, name: 'Codex', models }],
     failures: [],
   }
 }
@@ -228,12 +234,29 @@ export function codexSession(
       values: {
         ...(display.preview === undefined ? {} : { summary: display.preview }),
         backend: 'codex',
+        ...(display.model === undefined ? {} : {
+          modelSelection: {
+            lastUsed: { provider: CODEX_PROVIDER, model: display.model, ...(display.reasoningEffort === undefined ? {} : { reasoningEffort: display.reasoningEffort }) },
+            next: { provider: CODEX_PROVIDER, model: display.model, ...(display.reasoningEffort === undefined ? {} : { reasoningEffort: display.reasoningEffort }) },
+          },
+        }),
         codexStatus: display.status,
         permissions: codexPermissions(permissionPreset),
         imageLimits: codexImageLimits(),
       },
     },
   }
+}
+
+export function codexModelSelectionFromSession(session: RemoteSession): ModelSelection | undefined {
+  const values = record(session.projections?.values)
+  const projection = record(values.modelSelection)
+  const candidate = record(projection.next ?? projection.lastUsed)
+  const provider = string(candidate.provider)
+  const model = string(candidate.model)
+  if (provider !== CODEX_PROVIDER || model === undefined) return undefined
+  const reasoningEffort = string(candidate.reasoningEffort)
+  return { provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) }
 }
 
 export function updateCodexSession(

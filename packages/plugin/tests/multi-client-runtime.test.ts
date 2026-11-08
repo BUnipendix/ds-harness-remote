@@ -509,6 +509,7 @@ function fakeChannel(
 function config(): ResolvedConfig {
   return {
     terminal: { enabled: false },
+    sidebar: { entry: 'standard' },
     loopback: { ports: [] },
     enabled: true,
     role: 'host',
@@ -516,6 +517,7 @@ function config(): ResolvedConfig {
     deviceName: 'Host',
     forceRelay: true,
     identity: { requireVerifiedPeer: false },
+    rotatePinnedPeerKey: false,
     logLevel: 'error',
     reconnect: { enabled: false, initialDelayMs: 100, maxDelayMs: 1_000, jitter: 0 },
     codex: { enabled: false, binary: 'codex' },

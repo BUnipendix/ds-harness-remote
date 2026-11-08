@@ -20,7 +20,12 @@ import type {
   RemoteDevice,
   RemoteSession,
   ScheduleCatalogEntry,
+  ScheduleCreateRequest,
   ScheduleDeliveryRecord,
+  ScheduleRecord,
+  ScheduleTimingChange,
+  ScheduleUpdateRequest,
+  ScheduleUpdateResult,
   SendMessageResult,
   ServerConfig,
   SessionModels,
@@ -65,12 +70,14 @@ export interface AppState {
   piAvailable: boolean
   opencodeAvailable: boolean
   claudeAvailable: boolean
+  hermesAvailable: boolean
   workspaceCatalog?: { backend: AgentBackend; loading: boolean; error?: string }
   workspaces: WorkspaceView[]
   favoriteWorkspaces: WorkspaceShortcut[]
   /** Newest first; the home screen falls back to these when Favorites is empty. */
   recentWorkspaces: WorkspaceShortcut[]
   archivedSessionIds: string[]
+  pinnedSessionIds: string[]
   sessions: RemoteSession[]
   selectedSession?: RemoteSession
   /** History and the current connection's Codex event subscription are ready. */
@@ -93,6 +100,12 @@ export interface AppState {
   previewImageUri?: string
   setPreviewImageUri(uri?: string): void
   transportPreference: TransportPreference
+  /**
+   * Until this timestamp, connections to the current host skip WebRTC and go
+   * straight to the relay data plane. Set when an established P2P path drops
+   * or WebRTC negotiation keeps failing; expires so 'auto' can retry P2P.
+   */
+  relayOnlyUntil?: number
   compactHistory: boolean
   setCompactHistory(value: boolean): Promise<void>
   languagePreference: LanguagePreference
@@ -122,6 +135,9 @@ export interface AppState {
   reauthRequired: boolean
 
   loadScheduleTasks(): Promise<void>
+  createScheduleTask(sessionId: string, request: ScheduleCreateRequest): Promise<ScheduleRecord | null>
+  updateScheduleTask(sessionId: string, id: string, expected: ScheduleRecord, options?: { change?: ScheduleTimingChange; title?: string; prompt?: string }): Promise<ScheduleUpdateResult | null>
+  toggleScheduleTask(task: ScheduleCatalogEntry): Promise<boolean>
   deleteScheduleTask(sessionId: string, id: string): Promise<boolean>
   loadScheduleHistory(sessionId: string, id: string): Promise<ScheduleDeliveryRecord[]>
   bootstrap(): Promise<void>
@@ -155,18 +171,24 @@ export interface AppState {
   retrySendMessage(itemId: string): Promise<boolean>
   updateQueueItem(itemId: string, action: 'remove' | 'steer', rpcId?: string): Promise<boolean>
   forkChatMessage(message: ChatMessage): Promise<boolean>
+  quoteChatMessage(text: string, sessionId?: string): void
   rateMessage(message: ChatMessage, rating: 'positive' | 'negative'): Promise<boolean>
   stopSession(): Promise<void>
   respondApproval(itemId: string, outcome: 'allowed-once' | 'rejected'): Promise<void>
   respondQuestion(itemId: string, selected: Record<string, string[]>, custom?: Record<string, string>): Promise<void>
-  createSession(workspaceId?: string): Promise<boolean>
+  createSession(workspaceId?: string, backend?: AgentBackend): Promise<boolean>
+  forkSession(sessionId: string, backend?: RemoteSession['backend']): Promise<RemoteSession | undefined>
   archiveSession(sessionId: string): Promise<boolean>
+  unarchiveSession(sessionId: string, backend?: RemoteSession['backend']): Promise<boolean>
+  pinSession(sessionId: string, backend?: RemoteSession['backend']): Promise<boolean>
+  unpinSession(sessionId: string, backend?: RemoteSession['backend']): Promise<boolean>
+  renameSession(sessionId: string, title: string, backend?: RemoteSession['backend']): Promise<boolean>
   selectModel(selection: ModelSelection): Promise<boolean>
   selectPermission(preset: string): Promise<boolean>
   loadAgentPresets(): Promise<boolean>
   selectAgentPreset(preset: string): Promise<boolean>
   loadOlderHistory(): Promise<void>
-  workspaceCreate(path: string, backend?: 'harness' | 'codex' | 'cursor' | 'antigravity' | 'pi' | 'opencode' | 'claude'): Promise<WorkspaceView | undefined>
+  workspaceCreate(path: string, backend?: 'harness' | 'codex' | 'cursor' | 'antigravity' | 'pi' | 'opencode' | 'claude' | 'hermes'): Promise<WorkspaceView | undefined>
   workspaceRename(workspaceId: string, title: string): Promise<boolean>
   workspaceDelete(workspaceId: string): Promise<boolean>
   workspaceMove(workspaceId: string, beforeWorkspaceId?: string): Promise<boolean>
@@ -199,8 +221,8 @@ export const disconnected: ConnectionSnapshot = {
 }
 
 export function initialData(): Pick<AppState,
-  'config' | 'account' | 'devices' | 'selectedDevice' | 'connection' | 'hostDescriptor' | 'codexAvailable' | 'cursorAvailable' | 'antigravityAvailable' | 'piAvailable' | 'opencodeAvailable' | 'claudeAvailable' | 'workspaceCatalog' | 'workspaces' |
-  'favoriteWorkspaces' | 'recentWorkspaces' | 'archivedSessionIds' | 'sessions' | 'selectedSession' | 'codexReadySessionId' | 'currentWorkSessionIds' | 'messages' | 'sessionModels' | 'modelSelecting' | 'permissionSelecting' |
+  'config' | 'account' | 'devices' | 'selectedDevice' | 'connection' | 'hostDescriptor' | 'codexAvailable' | 'cursorAvailable' | 'antigravityAvailable' | 'piAvailable' | 'opencodeAvailable' | 'claudeAvailable' | 'hermesAvailable' | 'workspaceCatalog' | 'workspaces' |
+  'favoriteWorkspaces' | 'recentWorkspaces' | 'archivedSessionIds' | 'pinnedSessionIds' | 'sessions' | 'selectedSession' | 'codexReadySessionId' | 'currentWorkSessionIds' | 'messages' | 'sessionModels' | 'modelSelecting' | 'permissionSelecting' |
   'historyHasMore' | 'historyLoadingOlder' | 'oldestLoadedSeq' | 'transportPreference' | 'authPhase' | 'refreshing' | 'busyAction' | 'error' |
   'connectionProbeOrder' | 'connectionNetworkDetails' | 'reauthRequired' | 'feedbackBySession' | 'commandResult' | 'sessionLifecycles' | 'sessionProjectionSeqs'> {
   return {
@@ -218,11 +240,13 @@ export function initialData(): Pick<AppState,
     piAvailable: false,
     opencodeAvailable: false,
     claudeAvailable: false,
+    hermesAvailable: false,
     workspaceCatalog: undefined,
     workspaces: [],
     favoriteWorkspaces: [],
     recentWorkspaces: [],
     archivedSessionIds: [],
+    pinnedSessionIds: [],
     sessions: [],
     selectedSession: undefined,
     codexReadySessionId: undefined,

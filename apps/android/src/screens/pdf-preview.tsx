@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { WebView, type WebViewMessageEvent } from 'react-native-webview'
 import { pdfHtml } from '../generated/pdf-html'
+import { MAX_PDF_PREVIEW_BYTES } from '../services/workspace-file-preview'
 import { strings as t } from '../locales/i18n'
 import { Button } from '../ui/components'
 import { useTheme } from '../ui/theme-context'
 import { spacing, type } from '../ui/theme'
 
 const SOURCE = { html: pdfHtml, baseUrl: 'about:blank' }
-const MAX_BASE64_CHARS = Math.ceil((8 * 1024 * 1024) / 3) * 4
+const MAX_BASE64_CHARS = Math.ceil(MAX_PDF_PREVIEW_BYTES / 3) * 4
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/
 /** One evaluateJavascript call must stay small; the page acknowledges every chunk before the next. */
 const CHUNK_CHARS = 64 * 1024

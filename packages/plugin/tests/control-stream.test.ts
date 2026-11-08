@@ -275,6 +275,15 @@ describe('loopback status event stream', () => {
     await expect(response.text()).resolves.toBe('unauthorized')
   })
 
+  it('does not throw when a carrier has no web server or rpc handle', async () => {
+    const dispose = registerControlRoute(
+      { rpc: {} } as unknown as HostConnectionHandle,
+      async () => ({ ok: true, value: {} }),
+    )
+
+    await expect(dispose()).resolves.toBeUndefined()
+  })
+
 })
 
 interface FakeResponse {

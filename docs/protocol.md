@@ -10,7 +10,7 @@
 
 ### Claude ACP Host 实验性接入（Issue #125）
 
-`claude` 是独立 ACP backend ID，默认关闭，只使用现有加密 `agent.acp.*` 数据面及固定方法 allowlist；`initialize`、`session/new`、`session/prompt` 的 backend 可显式选择 `claude`。不得按命令名称猜测后端或在其不可用时回退到 Cursor。Host 使用本机预授权的 `claude-agent-acp` stdio adapter，不发送 Cursor `authenticate(cursor_login)`。权限响应仍仅允许现有单次允许/拒绝契约。Host 通过固定 `dsh/workspaceList` / `dsh/sessionList` 使用上游 ACP `session/list` 的分页目录与 Session authority；只接受 Host realpath 验证的真实 cwd。Claude `session/load` 必须显式指定 backend，并由 Host catalog 或本机已创建的 Session 确认 cwd，不能接受 Client 自报路径；活动回复期间禁止重新 load，独立 history 读取不受此限制。`dsh/sessionHistory` 可使用 `claude:<native-session-id>`，前缀必须匹配 backend；历史只经独立临时 ACP process 的 `session/load` replay 获取，不读本机 transcript 文件，最多 8 MiB / 10,000 更新，超限显式失败，读取失败不得返回成功的部分历史或伪造空历史。保留最多 30 个 live/loading Session，以及一个临时 history process；重复 load 不重放污染 live stream。`session/cancel` 使用标准无请求 ID 的 notification；Gateway 同步撤销该会话待审批句柄并隔离迟到权限请求，其他会话/后端不受影响，最终完成状态由上游 `cancelled` 确认，不伪造停止成功。Claude Desktop/Android 使用 `claude:cwd:` 工作区与 `claude:` 会话前缀，仅作客户端内存投影。模型目录与切换复用下述固定 `dsh/sessionModels` / `dsh/selectModel`，不开放 Claude 图片、文件或终端扩展。恢复会话发送 Prompt 前，Host 必须使用可信 cwd 加载；准备期间取消不启动迟到回复，也不清除后续重试。加密跨设备及原生设备验收仍待完成。
+`claude` 是独立 ACP backend ID，默认关闭，只使用现有加密 `agent.acp.*` 数据面及固定方法 allowlist；`initialize`、`session/new`、`session/prompt` 的 backend 可显式选择 `claude`。不得按命令名称猜测后端或在其不可用时回退到 Cursor。Host 使用本机预授权的 `claude-agent-acp` stdio adapter，不发送 Cursor `authenticate(cursor_login)`。权限响应仍仅允许现有单次允许/拒绝契约。Host 通过固定 `dsh/workspaceList` / `dsh/sessionList` 使用上游 ACP `session/list` 的分页目录与 Session authority；只接受 Host realpath 验证的真实 cwd。Claude `session/load` 必须显式指定 backend，并由 Host catalog 或本机已创建的 Session 确认 cwd，不能接受 Client 自报路径；活动回复期间禁止重新 load，独立 history 读取不受此限制。`dsh/sessionHistory` 可使用 `claude:<native-session-id>`，前缀必须匹配 backend；历史只经独立临时 ACP process 的 `session/load` replay 获取，不读本机 transcript 文件，最多 8 MiB / 10,000 更新，超限显式失败，读取失败不得返回成功的部分历史或伪造空历史。保留最多 30 个 live/loading Session，以及一个临时 history process；重复 load 不重放污染 live stream。`session/cancel` 使用标准无请求 ID 的 notification；Gateway 同步撤销该会话待审批句柄并隔离迟到权限请求，其他会话/后端不受影响，最终完成状态由上游 `cancelled` 确认，不伪造停止成功。Claude Desktop/Android 使用 `claude:cwd:` 工作区与 `claude:` 会话前缀，仅作客户端内存投影。模型目录与切换复用下述固定 `dsh/sessionModels` / `dsh/selectModel`，Claude 图片输入暂不支持；直接 Files/Terminal 复用 Host 共享工作区桥接及路径、连接和终端归属校验。恢复会话发送 Prompt 前，Host 必须使用可信 cwd 加载；准备期间取消不启动迟到回复，也不清除后续重试。加密跨设备及原生设备验收仍待完成。
 
 ## 0. 文档地位与仓库边界（规范性）
 
@@ -22,7 +22,7 @@
 - Plugin 的v0.1.2 alpha.1–rc.1 与 v0.1.5 rc.1 Session V3 Typert Remote tunnel、加密、重连和 capability 行为
 - Mock Host/Client 与协议 conformance fixtures
 
-`apps/server` 实现本文的单账号注册/刷新、设备发现、Control 与 Relay 子集；范围见 [最小 Server](../apps/server/README.md)。其余多账号、主机匹配码、Browser 授权、WebRTC/TURN 与 Admin 能力仍属于独立 Server，不得把未实现的能力声明为可用。
+`apps/server` 实现本文的单账号注册/刷新、设备发现、Control、WebRTC signaling/TURN credential 与 Relay 子集；范围见 [最小 Server](../apps/server/README.md)。其余多账号、主机匹配码、Browser 授权、独立 Relay attach/resume 与 Admin 能力仍属于独立 Server，不得把未实现的能力声明为可用。
 
 任何与本文不一致的示例代码都视为未完成实现，不能反向修改协议语义。当前尚未发布，
 旧 Android 业务 RPC 明确不兼容；首版发布后破坏兼容性的变更必须提升协议版本。
@@ -94,6 +94,9 @@ REST、Control frame 和解密后的 Remote message 使用 UTF-8 JSON。发送�
 - 拒绝重复安全关键字段的非规范解析结果。
 - 对未识别的必需 enum 值 fail closed。
 - 不把原始 parser 错误直接展示给用户。
+
+共享 Control 和解密消息解码器拒绝同一对象内的重复字段。转义后相同的字段名也视为重复。
+原始字节必须是有效 UTF-8。REST 入口尚未接入此检查。
 
 ### 4.2 标识符
 
@@ -292,7 +295,10 @@ deviceId 或相同 role，并为新角色签发独立 token pair、同步同账�
 }
 ```
 
-Server 必须轮换 refresh token。旧 token 重用触发 token family revoke。Client 必须原子替换本地 token；不能在日志或 URL 中传 token。
+Server 必须轮换 refresh token。完整多账号 Server 和开源自部署 Server 对未再次轮换、未撤销且未过期的直接后继 token 提供幂等恢复，不使用固定两分钟窗口；过时 token 被拒绝但不撤销当前有效凭据。恢复数据异常或数据库繁忙返回可重试 503。Client 必须原子替换本地 token；不能在日志或 URL 中传 token。
+
+自部署 Server 用请求携带的旧 refresh bearer 作为 HMAC-SHA256 密钥，结合随机 nonce、deviceId 和用途域分离派生后继 pair；磁盘只保存 token 摘要、nonce 和原始过期时间，不保存明文 bearer。消耗旧 token、保存恢复元数据和后继记录必须一起提交，写入失败时旧 token 保持可用。重复请求返回原 pair，不延长 access 或 refresh 生命周期；若 access 已过期，Client 应保存恢复的 pair，再用其 refresh token 正常轮换。后继再次轮换后，不允许用更早的祖先 token 跨代恢复。升级前已消耗且没有恢复元数据的旧 token 无法恢复，返回 `AUTH_INVALID`，但不撤销现有有效凭据。部署旧版 Server 的行为可能仍是重用即撤销，升级 Plugin 不会改变 Server 策略。
+HTTP `401/403` 的空响应、非 JSON 响应或不符合协议的错误体应保留凭据并退避重试，不单凭状态码判定设备授权失效。完整 Server 握手时的授权快照竞争使用 WebSocket `1013`（稍后重试），Client 保留凭据重连，不消耗授权刷新恢复次数。
 成功响应必须使用 §8.1 的 token pair schema。请求和响应禁止包含未定义字段。
 
 ### 8.3 Remote Web 授权换取 Browser Launcher 凭证
@@ -343,6 +349,14 @@ Content-Type: application/json
 - Host 与 Client 的 `owner_account` 必须非空且完全一致。
 - 不允许匿名 Client 注册，也没有设备码创建、领取、确认或轮询接口。
 - `GET /api/v1/devices` 只返回当前 Client 通过同账号授权边可访问的 Host。
+  新客户端使用 `?limit=50` 启用分页（1–100），后续传回不透明的 `cursor`，
+  直到 `nextCursor=null`。只传 cursor 时 limit 默认 50。分页按不可变 deviceId
+  升序使用 keyset 续读，每页重新过滤有效 membership 和未撤销 Host；不返回 identityKey。
+  游标不是授权凭据，也不代表冻结快照：翻页间的新建/撤销会反映到后续查询；
+  排在已读位置之前的新设备在下次刷新出现。格式错误游标返回 400 INVALID_MESSAGE，
+  越界 limit / 过长游标返回 422。为兼容旧客户端，不传 limit/cursor 时仍返回完整列表。
+  客户端必须读完所有页；每页完成授权/在线查询后再读取下一页，最多 8 路并发。
+  老服务端忽略 limit 并返回完整列表时仍限制并发，错误或取消不能被当成成功的部分列表。
 - 设备详情、presence、TURN 和连接请求继续校验 membership，防止 IDOR。
 - Server 发出 `connect.incoming` 前再次校验双方账号一致，历史跨账号授权边无效。
 - Host 只接受 `authorization: "account"` 的连接事件，并使用自己的 device token
@@ -439,6 +453,7 @@ Server 不能返回 Client 未宣告的 capability。Client 后续只能使用�
 
 `maxControlFrameBytes` 和 `maxRelayFrameBytes` 可以声明更小的上限。
 双方必须对后续收发 frame 使用该上限。大于 v1 默认值的声明必须拒绝。
+`heartbeatIntervalMs` 必须是正安全整数。
 
 `webrtcEnabled` 是可选实现扩展。值为 `false` 时，Client 只能使用 Relay。
 字段缺失时，Client 可以协商 WebRTC。Client 仍必须遵守 `hello.ack.capabilities`。
@@ -483,10 +498,24 @@ Server 校验 membership、双方账号归属一致且 Host online 后创建 `co
     "clientDeviceId": "01KCLIENT...",
     "clientIdentityKey": "...",
     "authorization": "account",
-    "preferredTransports": ["lan", "p2p", "turn", "relay"]
+    "preferredTransports": ["lan", "p2p", "turn", "relay"],
+    "relayEndpoint": "wss://relay.example/ws",
+    "relayTicket": "dshrt.<payload>.<signature>",
+    "relayNodeId": "relay-bj-1",
+    "relayEpoch": 7
   }
 }
 ```
+
+当双方声明 `transport.relay.attach` 且 Server 选择独立 Relay 时，`connect.accepted` 同样
+携带 `relayEndpoint`、节点绑定的短期 `relayTicket`、`relayNodeId` 和 `relayEpoch`。Host 和
+Client 必须分别使用自己收到的 ticket 连接该 endpoint；ticket 不能发送到 Control WebSocket
+或复用到另一条 connection。缺少这些字段时，双方继续使用旧的 Control WebSocket Relay 兼容路径。
+
+当 Host、Client 和实时 Relay 节点同时声明 `transport.relay.resume.v1` 时，Server 还可以
+附带可选的 `relayRecoveryTicket`。该票据绑定 connection、双方身份、Relay 节点和 epoch，
+只用于 Server 重启后的双端 control lease 恢复，不能用于重新附着 Relay data socket。
+旧版本会忽略该字段；任一参与方未声明能力时，Server 不会下发或接受该恢复票据。
 
 WebRTC DataChannel 建立后，Initiator 必须先发送 `transport.selected`，再开始 Noise
 握手。Host 必须按同一 Control WebSocket 上的消息顺序，在创建 authenticated channel 前应用该
@@ -499,6 +528,15 @@ WebRTC DataChannel 建立后，Initiator 必须先发送 `transport.selected`，
 `transport.selected.payload.transport` 的允许值为 `lan | p2p | turn | relay`。`lan` 是一等
 线协议值，双方声明 `transport.lan` capability 时必须端到端保留；Server 仅可为未声明该
 capability、仍只接受 `p2p | turn | relay` 的旧 RC2 Host 将 `lan` 兼容降级为 `p2p`。
+
+Initiator 的 `transport.selected` 可携带可选 `turnNode`（实际使用的 TURN relay 主机名，
+最长 253 字符，仅诊断用途），Server 转发时必须端到端保留，不得剥除。
+
+Responder 在自己的数据通道打开后也会上报一条 `transport.selected` 作为数据面通知。该上报
+以 Responder 本机的 ICE 路径为准，可能不在该链路协商出的传输集合内（例如链路只协商了
+`turn | relay`，而两端实际走 LAN）；Server 必须接受来自链路任一端的该帧，对不在协商集合内
+的上报按通知忽略，不得据此关闭连接或丢弃链路。Initiator（Client）的选择仍是绑定的权威
+来源，不在协商集合内时按协议拒绝。
 
 Host 必须要求 `authorization` 为 `account`，校验 identityKey 格式，并通过受 membership
 保护的设备详情接口确认 Client descriptor。本机已有相同 deviceId 但公钥不同则必须拒绝；
@@ -556,10 +594,13 @@ Noise handshake bytes 通过 Control frame 转发：
 ```
 
 Server 只校验 connection ownership、step 上限和 frame size，不解析 Noise payload。
+`step` 只允许 `1` 或 `2`。`data` 必须是规范的无 padding Base64URL。
 
 ### 12.3 Transport frames
 
-Noise handshake 完成后，Remote message JSON 作为 Noise transport plaintext。Relay 时 Noise ciphertext 放入 `relay` control frame；WebRTC 时直接发送 binary ciphertext。
+Noise handshake 完成后，Remote message JSON 作为 Noise transport plaintext。独立 Relay 时
+Noise ciphertext 放入 data WebSocket 的 `relay` frame；没有 attach 能力的旧客户端继续放入
+`relay` control frame；WebRTC 时直接发送 binary ciphertext。
 
 Noise transport 单消息最大为 65,535 bytes（包含 AEAD tag）。编码后的 Remote message
 超过 48 KiB 时，发送方必须先切成 DSH secure fragments，再逐片 Noise 加密。fragment
@@ -597,8 +638,31 @@ TLS/WSS 保护到 Server 的链路，但不能替代本节 E2EE。
 
 `counter` 必须是 `0..Number.MAX_SAFE_INTEGER` 范围内的整数。它用于 Server 基础限速和排序诊断，
 不作为解密 nonce 的权威来源。Noise frame 内部状态才是认证依据。
+`ciphertext` 必须是规范的无 padding Base64URL。
 
 Server 禁止解密、解析、缓存到数据库或记录 `ciphertext`。
+
+独立 Relay data WebSocket 使用同样的 v1 envelope，但连接建立后的第一帧必须是：
+
+```json
+{
+  "v": 1,
+  "id": "01K...",
+  "type": "relay.attach",
+  "timestamp": 1786000000000,
+  "payload": {
+    "connectionId": "01KCONN...",
+    "deviceId": "01KDEVICE...",
+    "peerDeviceId": "01KPEER...",
+    "ticket": "dshrt.<payload>.<signature>"
+  }
+}
+```
+
+Relay node 验证 ticket 的签名、`aud`、`nodeId`、`connectionId`、设备对、`epoch` 和有效期，
+并确保每个设备端在同一 connection 只有一个 active attach。成功后返回 `relay.ready`；之后
+只接受目标匹配的 `relay` frame 和心跳。任一端断开时，另一端收到 `relay.detach`，必须关闭
+当前 Noise connection 并重新建立完整的 connection，不能继续复用旧的 Noise 状态。
 
 ## 14. WebRTC Signaling
 
@@ -764,11 +828,11 @@ Connection handler。不得通过该入口绕过 Harness Remote allowlist、Remo
 对象或 `null`（数组与原始值拒绝）；额外顶层字段拒绝。Host 在进入任何本机 carrier 前
 按 `endpoint` 执行以下编译期固定操作白名单，新增上游操作默认拒绝：
 
-- 查询：`state`、`models`、`efforts`、`exchange`、`earlier`、`usage`、`room-progress`、`schedules`。
-- Bot 管理：`create-bot`、`duplicate-bot`、`update-bot`、`delete-bot`、`set-main`、`set-flags`。
-- 群聊管理：`create-room`、`update-room`、`delete-room`、`room-continue`。
+- 查询：`state`、`models`、`efforts`、`exchange`、`exchange-text`、`file-text`、`earlier`、`chat`、`run-stats`、`thinking`、`usage`、`room-progress`、`schedules`。
+- Bot 管理：`create-bot`、`duplicate-bot`、`update-bot`、`delete-bot`、`set-main`、`set-flags`、`resume`、`bot-new-part`、`bot-open-part`。
+- 群聊管理：`create-room`、`update-room`、`delete-room`、`stop-room-work`、`goal-draft`、`goal-control`、`room-continue`。
 - Agent 会话管理：`add-agent`、`agent-session`、`agent-adopt`、`agent-archive`、`agent-rename`、`remove-agent`。
-- 会话交互：`send`、`btw`、`btw-cancel`、`answer-question`、`dismiss-question`、`view-reply`、`approval-answer`、`stop-member-work`。
+- 会话交互：`send`、`btw`、`btw-cancel`、`btw-delete`、`side-new`、`side-ask`、`side-cancel`、`side-close`、`answer-question`、`dismiss-question`、`dismiss-view`、`view-reply`、`approval-answer`、`stop-member-work`。
 
 `view-reply` 转发 DS Bot 0.2.0 / 0.2.1 交互卡片的 `sessionId`、`viewId`、`action`、`values`，
 用于选择、确认、表单及 0.2.1 的 `submit` 提交；公式输入通过 `values.inputs` 传递。
@@ -784,8 +848,8 @@ DS Bot 0.2.1 旁问：`btw { sessionId, text }` 返回卡片 ID，`btw-cancel { 
 Android 卡片使用固定 0.2.1 schema 和受限表达式解释器，支持本地计算与 SVG 图表；
 HTML 仅展示摘要和主机打开提示，不执行 HTML/脚本，不增加网络访问或通用 RPC。
 
-`approval-answer` 只接受 DS Bot 的 `allow`（单次）或 `reject`，不开放 session-wide 审批。
-安装/升级、日程增删、凭据和 connector 管理、能力脚本、memory 写入、浏览器控制、诊断
+`approval-answer` 只接受 DS Bot 的 `allow`（单次）或 `reject`，不开放 session-wide 审批（0.3.0 起同时覆盖群聊与 Bot 自有会话审批）。
+安装/升级、日程增删、凭据和 connector/mail 管理、IM 外部账号配对与登录、本机 CLI Agent 注册（`local-agent-*`）、电脑操控与截屏（`computer-*`）、能力脚本、memory 写入、浏览器控制、诊断
 文件及本机偏好设置等操作均不开放；不允许通过 `api/bot` 间接扩大 Harness Remote 权限。
 被拒绝的操作返回 `INVALID_MESSAGE`，浏览器兼容入口显示安全的
 `remote-plugin/operation-not-allowed` 原生错误封装。
@@ -1180,12 +1244,12 @@ Host 固定 allowlist 仅增加该只读 endpoint；预设切换继续使用官�
 ### Native sidebar: read-only files and Host-configurable terminal
 
 Harness `0.1.6-alpha.2` 原生侧栏通过现有 `harness.remote.*` carrier 传输；不新增 Harness wire format。
-Android 用户可显式下载工作区原文件到系统目录选择器授权的手机目录（每文件最多 100 MiB，包含恰好 100 MiB；独立于 8 MiB 预览上限）。复用下述 `stat` / `readBytes` 分块读取及路径、版本、大小和取消校验，不新增 download RPC，不写 Host 文件；Office 下载保存原文件，转换后的 PDF 仅用于预览。
+Android 用户可显式下载工作区原文件到系统目录选择器授权的手机目录（每文件最多 100 MiB，包含恰好 100 MiB；独立于移动端预览上限：PDF 16 MiB、图片 8 MiB）。复用下述 `stat` / `readBytes` 分块读取及路径、版本、大小和取消校验，不新增 download RPC，不写 Host 文件；Office 下载保存原文件，转换后的 PDF 仅用于预览。
 
 固定只读 allowlist：`workspaceFiles/list|stat|read|readBytes|readAll|readRelated|changes`，以及
 `officeToPdf/generation|render`。Host 官方 Session lookup、组合文件系统、分页与大小限制继续生效。
-注意：上游 `list` / `changes` 限于工作区；文件读取遵循 Session 文件系统权限，允许工作区外的已授权文件，
-不能把“只读”表述成“只能读取 cwd 内文件”。旧 `fileviewer.read.v1` 仍使用 provider 授权。
+注意：上游 `list` / `changes` 限于工作区；为修复 #250 任意文件读取漏洞，原生 `workspaceFiles/read*` 与 `stat`
+严格限制在 Session 工作区根目录（cwd）物理包含范围内，拒绝未授权的工作区外路径与越界符号链接。旧 `fileviewer.read.v1` 仍使用 provider 授权。
 对 `codex:<threadId>` scope，Host 使用 CodeX thread 当前 `cwd` 作为独立根目录，并额外拒绝根目录之外的路径；
 该映射不改变 Harness Session 的既有工作区权限。CodeX 终端同样按 thread 建立独立 context。
 
@@ -1704,7 +1768,40 @@ Event 去重 key 为 `(hostDeviceId, seq)`。收到 `seq <= lastSeq` 的重放�
 
 应用层 `connection.ping` 已退出 Plugin；只保留 Control Channel heartbeat。
 
-Control Channel heartbeat 默认 25 秒，75 秒未收到有效 pong 视为断开。应用层可通过 `connection.ping` 估计 Host RTT。
+Control Channel heartbeat 默认 25 秒。75 秒未收到有效 pong 时，连接断开。
+Control ping/pong 的 nonce 可用于估计 Server RTT。
+
+关闭语义以 **close reason 为准，close code 视为随实现版本变化的传输细节**。所有端点
+（Host plugin、WebRTC transport、Relay transport、各 App）必须按 (code, reason) 对分类，
+不得单独比较 close code；共享实现为 `packages/protocol/src/close-semantics.ts` 的
+`isServerShutdownClose()` / `isHeartbeatTimeoutClose()` / `classifyControlClose()`。
+
+- **Server 重启 / 优雅关闭**：reason 恒为 `server shutdown`。自部署 Server（`apps/server`）
+  发送 `4009`；完整 Server 目前发送 `4001`，其 `4009` 被保留给心跳超时，因此 Client /
+  Host 必须把 `4001`、`4009`、`1013` + `server shutdown` 视作同一语义。该语义表示控制面
+  暂时不可用：支持 lease 的 Client/Host 可以在租约有效期内保留已认证的数据连接并后台
+  恢复控制面；`4003`（连接被替换）与 `4004`（设备撤销）不得保留。
+- **心跳超时**：完整 Server 发送 `4009` / `heartbeat timeout`；兼容旧实现时 `4001` /
+  `CONNECTION_FAILED` 同义。这只说明对端不再应答（与网络分区不可区分），是可重试的
+  连接故障，可以像网络分区一样保留租约内的会话并重新授权/加密握手，不能重放业务请求，
+  **不得**据此判定 Server 重启。
+- 其余 reason 一律不属于以上两种语义：`4001` 的其他 reason 仍可能是授权失败，
+  `4008`（非法控制帧）、`4011`（协议版本不支持）、`4002`（凭据失效，走刷新流程）等仍须
+  停止自动恢复或走各自的专用流程；`4003`/`4004` 永不保留。未识别的 code 不做保留，
+  各端点按自身既有策略决定是否重连（WebRTC/Relay 传输视为终态，Host 控制面继续重连）。
+
+**重连退避**：任何掉线都必须退避，不得立即重试形成重连风暴。统一采用 **全抖动（AWS full
+jitter）**：第 n 次重试的等待恒为 `[0, cap]` 内的均匀随机值，`cap` 为该循环的最大延迟——
+Host 端 `reconnect.maxDelayMs`（默认 30s）、Client 载体重连同样是 `reconnect.maxDelayMs`、
+WebRTC/Relay 控制面固定 15s。首次与后续重试使用同一窗口，不再按 `server shutdown` 区分：
+重启本身就是最坏情况，同样落在该窗口内。默认 30s 是有意偏保守：每次重连都会触发认证与
+设备发现请求，宁可拉长持续宕机时的重试间隔，也不在 Server 刚恢复时制造请求洪峰。
+
+- 期望等待约为 `cap/2`，瞬时抖动（1 秒级）通常仍在 1 秒上下恢复，而持续失败的连接最多
+  每 `cap` 秒才探一次，不会形成重连风暴。
+- `reconnect.initialDelayMs` 与 `reconnect.jitter` 仍被接受（兼容既有配置），但不再参与
+  延迟计算；只有 `maxDelayMs` 决定上限。
+- 退避只决定“何时重连”，不改变 lease 的授权预算；退避期间的保留与恢复仍受 lease 约束。
 
 Control ping：
 
@@ -2024,3 +2121,10 @@ Plugin configuration continues through the existing official `settings` endpoint
 Remote access namespaces remain local-only. Installation, removal, arbitrary
 plugin-manager methods and legacy ApiProxy plugin management remain disallowed.
 This adds no new wire format or capability and requires an updated Host plugin.
+
+
+## Optional WebRTC control recovery (implementation in progress)
+
+The additive `transport.webrtc.resume.v1` contract is specified in
+[WebRTC control recovery](design/webrtc-control-recovery.md). Protocol v1 and
+legacy control lifetimes remain unchanged unless all three parties negotiate it.

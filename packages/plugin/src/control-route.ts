@@ -16,7 +16,7 @@ const INVALID_REQUEST_RPC_ID = 'invalid-request'
 interface HostConnectionHandleLike {
   requestRejection?(request: { headers: IncomingHttpHeaders }): number | undefined
   rpc: {
-    handle(
+    handle?(
       channel: string,
       handler: ControlRouteHandler,
       options: { authority: 'loopback' | 'trusted-host' },
@@ -64,7 +64,13 @@ export function registerControlRoute(
 
   // A plain RPC channel owns POST only, so the browser falls back to unary
   // status reads on hosts that do not expose the Web server route.
-  return connection.rpc.handle(CONTROL_RPC_PREFIX, handler, {
+  const rpcHandle = connection.rpc.handle
+  // Older or partially initialized carriers may expose neither the Web Server
+  // route registry nor the legacy RPC helper.  Do not let that optional
+  // compatibility path abort plugin activation and leave the UI stuck in
+  // "control is still starting".
+  if (rpcHandle === undefined) return async () => undefined
+  return rpcHandle(CONTROL_RPC_PREFIX, handler, {
     authority: 'loopback',
   })
 }

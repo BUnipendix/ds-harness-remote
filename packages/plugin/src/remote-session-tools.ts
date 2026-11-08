@@ -8,6 +8,9 @@ import { RemoteTypertGateway } from './remote-typert-gateway.js'
 import { uuidV7 } from './ids.js'
 
 const id = z.string().min(1).max(256)
+const MAX_REMOTE_WORKSPACES = 512
+const MAX_REMOTE_SESSIONS = 2048
+const MAX_SESSIONS_PER_WORKSPACE = 2048
 const sequence = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
 const workspace = z.object({ hostId: id, backend: z.literal('harness'), workspaceId: id }).strict()
 const session = workspace.extend({ sessionId: id })
@@ -45,7 +48,7 @@ const rowSchema = z.object({
   parentSessionId: z.string().optional(), origin: z.string().optional(), projections: z.unknown().optional(),
 })
 type SessionRow = z.infer<typeof rowSchema>
-const workspaceRow = z.object({ workspaceId: id, path: z.string(), title: z.string(), sessionIds: z.array(id) })
+const workspaceRow = z.object({ workspaceId: id, path: z.string(), title: z.string(), sessionIds: z.array(id).max(MAX_SESSIONS_PER_WORKSPACE) })
 const record = (value: unknown): Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 export class RemoteSessionToolError extends Error {}
 const fail = (code: string): never => { throw new RemoteSessionToolError(code) }
@@ -162,7 +165,7 @@ export class RemoteSessionTools {
   private async requireWorkspace(gateway: RemoteTypertGateway, args: WorkspaceTarget, signal: AbortSignal) {
     const baseline = await first(gateway, 'workspace/follow', {}, signal)
     if (baseline.type !== 'baseline') fail('INVALID_WORKSPACE_BASELINE')
-    const rows = z.array(workspaceRow).parse(record(baseline.value).items)
+    const rows = z.array(workspaceRow).max(MAX_REMOTE_WORKSPACES).parse(record(baseline.value).items)
     const found = rows.find(row => row.workspaceId === args.workspaceId)
     if (!found) fail('WORKSPACE_NOT_FOUND')
     return found!
@@ -171,7 +174,7 @@ export class RemoteSessionTools {
   private async catalog(gateway: RemoteTypertGateway, args: WorkspaceTarget, signal: AbortSignal): Promise<SessionRow[]> {
     const found = await this.requireWorkspace(gateway, args, signal)
     const response = record(await gateway.invoke({ namespace: 'session', method: 'list', args: { _request: {} }, signal }))
-    const rows = z.array(rowSchema).parse(response.items)
+    const rows = z.array(rowSchema).max(MAX_REMOTE_SESSIONS).parse(response.items)
     const allowed = new Set(found.sessionIds)
     // Workspace ownership comes from the official catalog, never a guessed cwd.
     return rows.filter(row => allowed.has(row.sessionId) && row.parentSessionId === undefined && row.origin !== 'subagent')

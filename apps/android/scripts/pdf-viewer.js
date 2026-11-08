@@ -2,7 +2,7 @@
 // through globalThis.pdfjsWorker, which the bundled worker module installs, so the worker runs on
 // the main thread and this page spawns no Worker, fetches nothing and touches no file.
 ;(() => {
-  const MAX_BASE64_CHARS = Math.ceil((8 * 1024 * 1024) / 3) * 4
+  const MAX_BASE64_CHARS = Math.ceil((16 * 1024 * 1024) / 3) * 4
   const MAX_CANVAS_PIXELS = 4000000
   const MAX_CANVAS_DIMENSION = 8192
   const MAX_RATIO = 2

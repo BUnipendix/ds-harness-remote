@@ -1,12 +1,16 @@
+import { createServerNotice } from './server-notice.js'
+import { renderBodyPortal } from './portal.js'
 import type { Translate } from '../client-locale.js'
 import type { StatusFeed } from '../status-stream.js'
 import { formatBitrate, formatByteSize, formatLocalTime, shortDeviceId, transportLabel } from './presentation.js'
-import type { ClientReact, RemoteStatus } from './types.js'
+import type { ClientReact, PortalRenderer, RemoteStatus } from './types.js'
 
-export function createRemoteSessionHeaderAction(React: ClientReact) {
+export function createRemoteSessionHeaderAction(React: ClientReact, portal?: PortalRenderer) {
+  const ServerNotice = createServerNotice(React)
   function RemoteSessionHeaderAction(props: {
     control: <T>(endpoint: string, payload?: unknown) => Promise<T>
     statusFeed: StatusFeed<RemoteStatus>
+    onSignIn: () => void
     t: Translate
   }): unknown {
     const { t } = props
@@ -17,6 +21,17 @@ export function createRemoteSessionHeaderAction(React: ClientReact) {
     )
     const [busy, setBusy] = React.useState(false)
     const [routeOpen, setRouteOpen] = React.useState(false)
+    const [hostReference, setHostReference] = React.useState<{ label: string; platform: string; deviceId: string; invocation: string } | undefined>(undefined)
+    React.useEffect(() => {
+      const onReference = (event: Event): void => {
+        const detail = (event as CustomEvent).detail
+        if (detail === null || typeof detail !== 'object') return
+        if (typeof detail.label !== 'string' || typeof detail.platform !== 'string' || typeof detail.deviceId !== 'string' || typeof detail.invocation !== 'string') return
+        setHostReference(detail)
+      }
+      window.addEventListener('dsh-remote-host-reference', onReference)
+      return () => window.removeEventListener('dsh-remote-host-reference', onReference)
+    }, [])
 
     React.useEffect(() => {
       if (status?.mode !== 'remote') return
@@ -62,7 +77,16 @@ export function createRemoteSessionHeaderAction(React: ClientReact) {
       return () => document.removeEventListener('keydown', closeOnEscape)
     }, [routeOpen])
 
-    if (status?.mode !== 'remote') return null
+    const renderHostReference = (): unknown => hostReference === undefined ? null : renderBodyPortal(portal, React.createElement('aside', { className: 'dshRemoteHostReferencePanel', role: 'dialog', 'aria-label': 'Remote Host' },
+      React.createElement('header', null,
+        React.createElement('strong', null, 'Remote Host'),
+        React.createElement('button', { type: 'button', 'aria-label': t('close'), onClick: () => setHostReference(undefined) }, '×')),
+      React.createElement('dl', null,
+        React.createElement('div', null, React.createElement('dt', null, '名称'), React.createElement('dd', null, hostReference.label)),
+        React.createElement('div', null, React.createElement('dt', null, '系统'), React.createElement('dd', null, hostReference.platform)),
+        React.createElement('div', null, React.createElement('dt', null, '设备 ID'), React.createElement('dd', { className: 'isMono' }, hostReference.deviceId)),
+        React.createElement('div', null, React.createElement('dt', null, '调用内容'), React.createElement('dd', { className: 'isMono' }, hostReference.invocation)))))
+    if (status?.mode !== 'remote') return renderHostReference()
     const exit = async (): Promise<void> => {
       setBusy(true)
       try {
@@ -127,18 +151,24 @@ export function createRemoteSessionHeaderAction(React: ClientReact) {
         strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true,
       }, React.createElement('rect', { x: 3, y: 4, width: 18, height: 13, rx: 2 }), React.createElement('path', { d: 'M8 21h8M12 17v4' })),
       React.createElement('span', { className: 'dshRemoteSessionTarget' }, t('remoteModeLabel', { name: status.target?.name ?? t('host') })),
-      React.createElement('button', {
+      status.clientAuthRequired ? React.createElement('button', {
+        type: 'button', className: 'dshRemoteNetwork isOffline', onClick: props.onSignIn,
+      }, t('clientSignInAgain')) : React.createElement('button', {
         type: 'button',
         className: `dshRemoteNetwork${networkOnline ? ' isOnline' : ' isOffline'}`,
         title: networkLabel,
-        disabled: !networkOnline,
         'aria-haspopup': 'dialog',
         'aria-expanded': routeOpen,
         onClick: () => setRouteOpen(value => !value),
       }, React.createElement('i', { 'aria-hidden': true }), networkLabel),
-      networkOnline ? React.createElement('span', { className: 'dshRemoteEncrypted' }, t('remoteLinkEncrypted')) : null,
+      React.createElement(ServerNotice, {
+        compact: true,
+        offline: network !== undefined && network.controlChannelState !== 'open',
+        linked: networkOnline, expiresAt: network?.recoveryExpiresAt, t,
+      }),
+      renderHostReference(),
       React.createElement('button', { type: 'button', className: 'dshRemoteHeaderExitLink', disabled: busy, onClick: () => void exit() }, t('exitRemote')),
-      !routeOpen ? null : React.createElement('div', {
+      !routeOpen || !networkOnline ? null : renderBodyPortal(portal, React.createElement('div', {
         className: 'dshRemoteRouteBackdrop',
         role: 'presentation',
         onMouseDown: (event: MouseEvent) => { if (event.target === event.currentTarget) setRouteOpen(false) },
@@ -149,6 +179,11 @@ export function createRemoteSessionHeaderAction(React: ClientReact) {
       }, React.createElement('header', null,
         React.createElement('strong', null, t('connectionRouteTitle')),
         React.createElement('button', { type: 'button', 'aria-label': t('close'), onClick: () => setRouteOpen(false) }, '×')),
+        React.createElement(ServerNotice, {
+          offline: network !== undefined && network.controlChannelState !== 'open',
+          linked: networkOnline, expiresAt: network?.recoveryExpiresAt, t,
+          onReconnect: () => { void props.control('mode.set', { mode: 'remote', targetDeviceId: status.target?.deviceId }).catch(() => undefined) },
+        }),
         React.createElement('ol', null,
           React.createElement('li', null,
             React.createElement('small', null, t('connectionRouteFrom')),
@@ -191,7 +226,7 @@ export function createRemoteSessionHeaderAction(React: ClientReact) {
               : formatBitrate(webRtc.availableOutgoingBitrate)),
             fact(t('bytesSent'), webRtc.bytesSent === undefined ? t('notProvided') : formatByteSize(webRtc.bytesSent)),
             fact(t('bytesReceived'), webRtc.bytesReceived === undefined ? t('notProvided') : formatByteSize(webRtc.bytesReceived)))),
-        React.createElement('p', null, t('connectionRouteEncrypted')))))
+        React.createElement('p', null, t('connectionRouteEncrypted'))))))
   }
 
   return RemoteSessionHeaderAction
@@ -234,5 +269,23 @@ export function hideLocalSessionActions(): () => void {
   return () => {
     observer.disconnect()
     document.querySelectorAll(`[${hiddenAttribute}]`).forEach(element => element.removeAttribute(hiddenAttribute))
+  }
+}
+
+
+export function createRemoteHostReferenceView(React: ClientReact): unknown {
+  return function RemoteHostReferenceView(): unknown {
+    const [reference, setReference] = React.useState<{ label: string; platform: string; deviceId: string; invocation: string } | undefined>(undefined)
+    React.useEffect(() => {
+      const onReference = (event: Event): void => {
+        const detail = (event as CustomEvent).detail
+        if (detail && typeof detail === 'object' && typeof detail.label === 'string' && typeof detail.platform === 'string' && typeof detail.deviceId === 'string' && typeof detail.invocation === 'string') setReference(detail)
+      }
+      window.addEventListener('dsh-remote-host-reference', onReference)
+      return () => window.removeEventListener('dsh-remote-host-reference', onReference)
+    }, [])
+    if (!reference) return React.createElement('div', { className: 'dshRemoteHostReferenceEmpty' }, '点击消息中的主机引用查看详情')
+    const row = (label: string, value: string, mono = false): unknown => React.createElement('div', null, React.createElement('dt', null, label), React.createElement('dd', { className: mono ? 'isMono' : undefined }, value))
+    return React.createElement('section', { className: 'dshRemoteHostReferenceView' }, React.createElement('h2', null, reference.label), React.createElement('dl', null, row('系统', reference.platform), row('设备 ID', reference.deviceId, true), row('远端调用', reference.invocation)))
   }
 }

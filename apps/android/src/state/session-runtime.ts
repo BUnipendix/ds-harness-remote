@@ -3,10 +3,11 @@ import type { AcpStream, CodexStream, CodexTimelineState } from '@dsh-remote/cli
 import { workspaceStableKey } from '../lib/workspace-key'
 import { strings as zhCN } from '../locales/i18n'
 import { loadAntigravityCatalog, mergeAntigravityCatalog } from '../services/antigravity'
-import { loadCodexModels } from '../services/codex'
+import { codexModelSelectionFromSession, loadCodexModels } from '../services/codex'
 import { cursorNativeId } from '../services/cursor'
 import { loadOpencodeCatalog, loadOpencodeModels, mergeOpencodeCatalog } from '../services/opencode'
 import { loadClaudeCatalog, loadClaudeModels, mergeClaudeCatalog } from '../services/claude'
+import { loadHermesCatalog, loadHermesModels, mergeHermesCatalog } from '../services/hermes'
 import { loadPiCatalog, loadPiModels, mergePiCatalog } from '../services/pi'
 import { AndroidRemoteRuntime } from '../services/remote-runtime'
 import { saveRecentWorkspaces } from '../services/storage'
@@ -31,6 +32,8 @@ export class SessionRuntime {
   connectionGeneration = 0
   /** Rows created before this instant predate the current connection (reconcile scope). */
   connectionStartedAt = 0
+  /** Consecutive WebRTC negotiation fallbacks on the current host (relay downgrade memory). */
+  webRtcFallbackStreak = 0
   pendingMuxFrames: { generation: number; frame: MuxStreamFrame }[] = []
   muxFlushTimer: ReturnType<typeof setTimeout> | undefined
   private pendingCodexFrames: { generation: number; frame: { method: string; params: unknown } }[] = []
@@ -199,6 +202,26 @@ export class SessionRuntime {
     } catch { /* Keep the live projection when Claude is still persisting its summary. */ }
   }
 
+  async refreshHermesCatalog(): Promise<void> {
+    if (!this.connection.hasHermes()) return
+    const client = this.connection.requireHermes()
+    const deviceId = this.store.get().selectedDevice?.deviceId
+    try {
+      const catalog = await loadHermesCatalog(client, this.store.get().workspaces)
+      if (!this.connection.hasHermes() || this.connection.requireHermes() !== client || this.store.get().selectedDevice?.deviceId !== deviceId) return
+      this.store.set(state => {
+        const merged = mergeHermesCatalog(catalog, state.workspaces, state.sessions)
+        return {
+          workspaces: [...state.workspaces.filter(item => item.backend !== 'hermes'), ...merged.workspaces],
+          sessions: [...state.sessions.filter(item => item.backend !== 'hermes'), ...merged.sessions],
+          selectedSession: state.selectedSession?.backend === 'hermes'
+            ? merged.sessions.find(item => item.sessionId === state.selectedSession?.sessionId) ?? state.selectedSession
+            : state.selectedSession,
+        }
+      })
+    } catch { /* Keep the live projection when Hermes is still persisting its summary. */ }
+  }
+
   async closeActiveCodexStream(notifyRemote = true): Promise<void> {
     this.clearPendingCodexFrames()
     const stream = this.activeCodexStream
@@ -217,7 +240,9 @@ export class SessionRuntime {
   async ensureCursorStream(session: RemoteSession, current: () => boolean = () => true): Promise<void> {
     await this.closeActiveCursorStream()
     if (!current()) return
-    const client = session.backend === 'claude' ? this.connection.requireClaude() : session.backend === 'opencode'
+    const client = session.backend === 'claude' ? this.connection.requireClaude()
+      : session.backend === 'hermes' ? this.connection.requireHermes()
+      : session.backend === 'opencode'
       ? this.connection.requireOpencode()
       : session.backend === 'pi'
         ? this.connection.requirePi()
@@ -236,7 +261,7 @@ export class SessionRuntime {
           selectedSession: state.selectedSession?.sessionId === session.sessionId
             ? { ...state.selectedSession, running: false }
             : state.selectedSession,
-          ...(closed.reason === 'failed' ? { error: session.backend === 'claude' ? zhCN.runtime.claudeUnavailable : session.backend === 'opencode' ? zhCN.runtime.opencodeUnavailable : session.backend === 'pi' ? zhCN.runtime.piUnavailable : session.backend === 'antigravity' ? zhCN.runtime.antigravityUnavailable : zhCN.runtime.cursorUnavailable } : {}),
+          ...(closed.reason === 'failed' ? { error: session.backend === 'claude' ? zhCN.runtime.claudeUnavailable : session.backend === 'hermes' ? zhCN.runtime.hermesUnavailable : session.backend === 'opencode' ? zhCN.runtime.opencodeUnavailable : session.backend === 'pi' ? zhCN.runtime.piUnavailable : session.backend === 'antigravity' ? zhCN.runtime.antigravityUnavailable : zhCN.runtime.cursorUnavailable } : {}),
         }))
         // Transport flaps can close the ACP stream while the secure channel is
         // still up. Re-open so the next prompt does not miss live frames.
@@ -244,7 +269,7 @@ export class SessionRuntime {
         const phase = this.store.get().connection.phase
         if (phase !== 'connected') return
         const selected = this.store.get().selectedSession
-        if (selected?.sessionId !== session.sessionId || (selected.backend !== 'cursor' && selected.backend !== 'antigravity' && selected.backend !== 'pi' && selected.backend !== 'opencode' && selected.backend !== 'claude')) return
+        if (selected?.sessionId !== session.sessionId || (selected.backend !== 'cursor' && selected.backend !== 'antigravity' && selected.backend !== 'pi' && selected.backend !== 'opencode' && selected.backend !== 'claude' && selected.backend !== 'hermes')) return
         void this.ensureCursorStream(selected, current).catch(() => undefined)
       },
     )
@@ -331,6 +356,16 @@ export class SessionRuntime {
     } catch { /* Optional model discovery must not prevent conversation recovery. */ }
   }
 
+  async refreshHermesModels(session: RemoteSession, current: () => boolean): Promise<void> {
+    const generation = this.connectionGeneration
+    try {
+      const models = await loadHermesModels(this.connection.requireHermes(), cursorNativeId(session))
+      if (!current() || generation !== this.connectionGeneration) return
+      this.store.set(state => state.selectedSession?.sessionId === session.sessionId
+        ? { sessionModels: models } : {})
+    } catch { /* Optional model discovery must not prevent conversation recovery. */ }
+  }
+
   async refreshSessionModels(sessionId: string): Promise<void> {
     try {
       const models = await this.connection.requireProxy().sessionModels(sessionId)
@@ -344,7 +379,11 @@ export class SessionRuntime {
 
   async refreshCodexModels(sessionId: string): Promise<void> {
     try {
-      let models = await loadCodexModels(this.connection.requireCodex())
+      const session = this.store.get().selectedSession
+      let models = await loadCodexModels(
+        this.connection.requireCodex(),
+        session?.sessionId === sessionId ? codexModelSelectionFromSession(session) : undefined,
+      )
       const selected = this.codexModelSelections.get(sessionId)
       if (selected !== undefined && models.groups.some(provider => provider.id === selected.provider
         && provider.models.some(model => model.id === selected.model))) {

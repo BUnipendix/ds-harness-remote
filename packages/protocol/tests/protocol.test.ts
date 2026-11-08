@@ -11,6 +11,9 @@ import {
   remoteEvents,
   rpcMethods,
   harnessTransportDescriptionSchema,
+  helloPayloadSchema,
+  MAX_REMOTE_CAPABILITY_ENTRIES,
+  MAX_REMOTE_WORKSPACE_TYPE_ENTRIES,
   parseRemoteWorkspaceTypes,
   remoteWorkspaceTypeDescriptionSchema,
   selectCapabilities,
@@ -115,5 +118,29 @@ describe('protocol envelope', () => {
       null,
       'just a string',
     ])).toEqual([valid])
+  })
+
+  it('bounds remote capability collections before validating every child', () => {
+    const oversizedCapabilities = Array.from({ length: MAX_REMOTE_CAPABILITY_ENTRIES + 1 }, () => 123)
+    for (const parse of [
+      () => helloPayloadSchema.parse({
+        role: 'client', deviceId: 'client-1', accessToken: 'token-1', protocols: [1],
+        capabilities: oversizedCapabilities,
+      }),
+      () => harnessTransportDescriptionSchema.parse({ capabilities: oversizedCapabilities }),
+    ]) {
+      try {
+        parse()
+        throw new Error('expected oversized capabilities to be rejected')
+      } catch (error) {
+        expect(error).toMatchObject({ issues: expect.arrayContaining([expect.any(Object)]) })
+        expect((error as { issues: unknown[] }).issues).toHaveLength(1)
+      }
+    }
+
+    const oversizedWorkspaceTypes = Array.from({ length: MAX_REMOTE_WORKSPACE_TYPE_ENTRIES + 1 }, () => ({
+      id: 'bad', name: 'bad', capability: 'bad', available: true,
+    }))
+    expect(parseRemoteWorkspaceTypes(oversizedWorkspaceTypes)).toEqual([])
   })
 })

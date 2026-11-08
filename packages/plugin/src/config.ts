@@ -11,6 +11,9 @@ export interface Config {
   serverUrl?: string
   deviceName?: string
   terminal?: { enabled?: boolean }
+  remoteTools?: { enabled?: boolean }
+  /** Where the Desktop client shows the Remote entry: beside Settings or in the account row. */
+  sidebar?: { entry?: 'standard' | 'compact' }
   hostControl?: { enabled?: boolean }
   /**
    * Peer identity policy. `requireVerifiedPeer` refuses to use any peer key
@@ -20,6 +23,13 @@ export interface Config {
   identity?: { requireVerifiedPeer?: boolean }
   loopback?: { ports?: number[] }
   forceRelay?: boolean
+  /**
+   * When a known peer device presents a NEW identity key after re-authorizing with the
+   * same account membership (e.g. the peer reinstalled the Harness), rotate the pinned
+   * key instead of rejecting the connection. The new key is validated against the
+   * account directory before this policy applies. Default: false (pin strictly).
+   */
+  rotatePinnedPeerKey?: boolean
   logLevel?: 'debug' | 'info' | 'warn' | 'error'
   reconnect?: boolean | {
     initialDelayMs?: number
@@ -68,6 +78,7 @@ export interface ResolvedConfig {
   serverUrl?: string
   deviceName: string
   forceRelay: boolean
+  rotatePinnedPeerKey: boolean
   logLevel: 'debug' | 'info' | 'warn' | 'error'
   reconnect: {
     enabled: boolean
@@ -76,6 +87,8 @@ export interface ResolvedConfig {
     jitter: number
   }
   terminal: { enabled: boolean }
+  remoteTools?: { enabled: boolean }
+  sidebar: { entry: 'standard' | 'compact' }
   hostControl?: { enabled: boolean }
   identity: { requireVerifiedPeer: boolean }
   loopback: { ports: number[] }
@@ -104,10 +117,13 @@ const entryConfigSchema = s.object({
   serverUrl: s.string(),
   deviceName: s.string(),
   terminal: s.object({ enabled: s.boolean() }),
+  remoteTools: s.object({ enabled: s.boolean() }),
+  sidebar: s.object({ entry: s.union(['standard', 'compact'] as const) }),
   hostControl: s.object({ enabled: s.boolean() }),
   identity: s.object({ requireVerifiedPeer: s.boolean() }),
   loopback: s.object({ ports: s.array(s.number()) }),
   forceRelay: s.boolean(),
+  rotatePinnedPeerKey: s.boolean(),
   logLevel: s.union(['debug', 'info', 'warn', 'error'] as const),
   reconnect: s.union([
     s.boolean(),
@@ -158,10 +174,13 @@ const configSchema = z.object({
   serverUrl: z.string().url().optional(),
   deviceName: z.string().trim().min(1).max(80).optional(),
   terminal: z.object({ enabled: z.boolean().optional() }).strict().optional(),
+  remoteTools: z.object({ enabled: z.boolean().optional() }).strict().optional(),
+  sidebar: z.object({ entry: z.enum(['standard', 'compact']).optional() }).strict().optional(),
   hostControl: z.object({ enabled: z.boolean().optional() }).strict().optional(),
   identity: z.object({ requireVerifiedPeer: z.boolean().optional() }).strict().optional(),
   loopback: z.object({ ports: z.array(z.number().int().min(1024).max(65535)).max(16).optional() }).strict().optional(),
   forceRelay: z.boolean().optional(),
+  rotatePinnedPeerKey: z.boolean().optional(),
   logLevel: z.enum(['debug', 'info', 'warn', 'error']).optional(),
   reconnect: reconnectSchema.optional(),
   codex: z.object({
@@ -189,7 +208,7 @@ export function resolveConfig(input: ConfigInput = {}, env: NodeJS.ProcessEnv = 
   const reconnect = typeof parsed.reconnect === 'object' ? parsed.reconnect : {}
   const configuredServerUrl = parsed.serverUrl ?? env.DSH_REMOTE_SERVER
   const serverUrl = configuredServerUrl === undefined ? undefined : normalizeServerUrl(configuredServerUrl)
-  const initialDelayMs = reconnect.initialDelayMs ?? 1_000
+  const initialDelayMs = reconnect.initialDelayMs ?? 4_000
   const maxDelayMs = reconnect.maxDelayMs ?? 30_000
   if (maxDelayMs < initialDelayMs) {
     throw new TypeError('reconnect.maxDelayMs must be greater than or equal to reconnect.initialDelayMs')
@@ -205,8 +224,11 @@ export function resolveConfig(input: ConfigInput = {}, env: NodeJS.ProcessEnv = 
     // through the live pairing offer before any business frame is accepted.
     identity: { requireVerifiedPeer: parsed.identity?.requireVerifiedPeer ?? env.DSH_REMOTE_REQUIRE_VERIFIED_PEER !== 'false' },
     terminal: { enabled: parsed.terminal?.enabled ?? (env.DSH_REMOTE_TERMINAL_ENABLED === undefined || env.DSH_REMOTE_TERMINAL_ENABLED === 'true') },
+    remoteTools: { enabled: parsed.remoteTools?.enabled ?? true },
+    sidebar: { entry: parsed.sidebar?.entry === 'compact' ? 'compact' : 'standard' },
     loopback: { ports: [...new Set(parsed.loopback?.ports ?? [])] },
     forceRelay: parsed.forceRelay ?? false,
+    rotatePinnedPeerKey: parsed.rotatePinnedPeerKey ?? false,
     logLevel: parsed.logLevel ?? 'info',
     reconnect: {
       enabled: parsed.reconnect !== false,
@@ -224,10 +246,10 @@ export function resolveConfig(input: ConfigInput = {}, env: NodeJS.ProcessEnv = 
     },
     acp: {
       enabled: acpEnabled,
-      backends: [...new Set(['codex', 'cursor', 'antigravity', 'pi', 'claude', 'opencode', ...(parsed.acp?.backends?.filter(item => item.id !== 'kimi').map(item => item.id) ?? [])])].map(id => {
+      backends: [...new Set(['codex', 'cursor', 'antigravity', 'pi', 'claude', 'opencode', 'hermes', ...(parsed.acp?.backends?.filter(item => item.id !== 'kimi').map(item => item.id) ?? [])])].map(id => {
         const configured = parsed.acp?.backends?.find(item => item.id === id)
         const legacy = parsed.acp?.backend === id ? parsed.acp : undefined
-        const defaults: Record<string, string> = { codex: 'codex', cursor: 'agent', antigravity: 'agy', pi: 'pi-acp', claude: 'claude-agent-acp', opencode: 'opencode' }
+        const defaults: Record<string, string> = { codex: 'codex', cursor: 'agent', antigravity: 'agy', pi: 'pi-acp', claude: 'claude-agent-acp', opencode: 'opencode', hermes: 'hermes' }
         const cursorCommand = id === 'codex' ? parsed.codex?.binary : id === 'cursor'
           ? parsed.cursor?.binary ?? env.DSH_REMOTE_CURSOR_BINARY ?? env.DSH_REMOTE_ACP_BINARY
           : undefined
@@ -235,10 +257,13 @@ export function resolveConfig(input: ConfigInput = {}, env: NodeJS.ProcessEnv = 
         return {
           id,
           enabled: configured?.enabled ?? legacy?.enabled
-            ?? (id === 'codex' ? codexEnabled : id === 'cursor' ? cursorEnabled : id === 'pi' ? true : id === 'claude' ? true : id === 'opencode' ? true : parsed.acp !== undefined),
+            // Hermes opts in explicitly: a Host without it installed must not spawn it by default.
+            ?? (id === 'codex' ? codexEnabled : id === 'cursor' ? cursorEnabled : id === 'pi' ? true : id === 'claude' ? true
+              : id === 'opencode' ? true : id === 'hermes' ? false : parsed.acp !== undefined),
           command: configured?.command ?? legacy?.command ?? cursorCommand ?? defaults[id] ?? id,
           args: id === 'codex' ? ['app-server'] : configured?.args ?? legacy?.args
-            ?? (id === 'pi' || id === 'claude' ? [] : id === 'antigravity' ? ['--input-format', 'stream-json', '--output-format', 'stream-json'] : ['acp']),
+            ?? (id === 'pi' || id === 'claude' ? [] : id === 'hermes' ? ['acp']
+              : id === 'antigravity' ? ['--input-format', 'stream-json', '--output-format', 'stream-json'] : ['acp']),
           ...(cwd === undefined ? {} : { cwd }),
         }
       }),

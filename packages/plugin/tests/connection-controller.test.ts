@@ -2,6 +2,7 @@ import { runScenarios } from '../../../scripts/test-scenarios.mjs'
 import { MAX_SECURE_MESSAGE_BYTES, createRpcRequest, createRpcResponse, type RemoteMessage } from '@dsh-remote/protocol'
 import { describe, expect, it, vi } from 'vitest'
 import { ConnectionController, ConnectionRejectedError } from '../src/connection-controller.js'
+import { SafeLogger } from '../src/logging.js'
 import type { IdentityStore } from '../src/identity-store.js'
 import type { RpcRouter } from '../src/rpc-router.js'
 import type { AuthenticatedPeerChannel } from '../src/types.js'
@@ -174,12 +175,15 @@ describe('ConnectionController', () => {
 
   it('returns a small RPC error instead of silently dropping an oversized response', async () => {
     const oversized = createRpcResponse('request-1', { value: 'x'.repeat(MAX_SECURE_MESSAGE_BYTES) })
+    const logger = new SafeLogger({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() })
+    vi.spyOn(logger, 'warn')
     const controller = new ConnectionController(
       { isTrusted: () => true } as unknown as IdentityStore,
       () => ({
         handle: vi.fn(async () => oversized),
         closePeerStreams: vi.fn(async () => undefined),
       } as unknown as RpcRouter),
+      logger,
     )
     const channel = fakeChannel()
     await controller.accept(channel)
@@ -194,7 +198,43 @@ describe('ConnectionController', () => {
         retryable: true,
       }),
     }))
+    expect(logger.warn).toHaveBeenCalledWith('host response exceeds secure channel', expect.objectContaining({
+      endpoint: 'session.history',
+      bytes: expect.any(Number),
+      limit: MAX_SECURE_MESSAGE_BYTES,
+    }))
     expect(channel.close).not.toHaveBeenCalled()
+  })
+
+  it('logs a warning with the requested endpoint when a response exceeds the secure message limit', async () => {
+    const oversized = createRpcResponse('req-oversized', { value: 'x'.repeat(MAX_SECURE_MESSAGE_BYTES) })
+    const logger = new SafeLogger({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() })
+    vi.spyOn(logger, 'warn')
+    const controller = new ConnectionController(
+      { isTrusted: () => true } as unknown as IdentityStore,
+      () => ({
+        handle: vi.fn(async () => oversized),
+        closePeerStreams: vi.fn(async () => undefined),
+      } as unknown as RpcRouter),
+      logger,
+    )
+    const channel = fakeChannel()
+    await controller.accept(channel)
+
+    channel.push(createRpcRequest('harness.remote.call', { endpoint: 'session/list', payload: { args: {} } }))
+
+    await vi.waitFor(() => expect(channel.send).toHaveBeenCalledOnce())
+    expect(logger.warn).toHaveBeenCalledWith('host response exceeds secure channel', {
+      endpoint: 'session/list',
+      bytes: expect.any(Number),
+      limit: MAX_SECURE_MESSAGE_BYTES,
+    })
+    expect(channel.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'rpc.error',
+      payload: expect.objectContaining({
+        code: 'RESPONSE_TOO_LARGE',
+      }),
+    }))
   })
 
 })

@@ -1,5 +1,5 @@
 import { runScenarios, scenarioName } from '../../../scripts/test-scenarios.mjs'
-import { mkdtemp, mkdir, realpath, rm, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -14,7 +14,7 @@ import {
   CODEX_UNMATERIALIZED_THREAD_MESSAGE,
   CodexAppServerError,
 } from '../src/codex/app-server.js'
-import { CodexRemoteDomain } from '../src/codex/domain.js'
+import { CodexRemoteDomain, codexBinaryCandidates } from '../src/codex/domain.js'
 import type { SafeLogger } from '../src/logging.js'
 
 const cleanup: string[] = []
@@ -55,6 +55,26 @@ describe('CodexRemoteDomain', () => {
       state: 'disabled',
       restartAttempt: 0,
     })
+    await domain.close()
+  })
+
+  it('deduplicates concurrent workspace authority reads without retaining stale roots', async () => {
+    const { root } = await directories()
+    const app = new FakeAppServer(root)
+    const domain = new CodexRemoteDomain({ enabled: true, binary: 'codex' }, logger(), () => app)
+    await domain.start()
+
+    await Promise.all([
+      domain.call('connection-1', { method: 'thread/read', params: { threadId: 'allowed-thread' } }),
+      domain.call('connection-2', { method: 'thread/read', params: { threadId: 'allowed-thread' } }),
+    ])
+    expect(app.calls.filter(call => call.method === 'project/list')).toHaveLength(1)
+    // One authorization read is shared; each caller still receives its own
+    // official thread/read response.
+    expect(app.calls.filter(call => call.method === 'thread/read')).toHaveLength(3)
+
+    await domain.call('connection-1', { method: 'thread/read', params: { threadId: 'allowed-thread' } })
+    expect(app.calls.filter(call => call.method === 'project/list')).toHaveLength(2)
     await domain.close()
   })
 
@@ -711,6 +731,56 @@ describe('CodexRemoteDomain', () => {
     )
   }, 10000)
 
+  it('reads summary history item pages in parallel while retaining turn order', async () => {
+    const { root } = await directories()
+    const app = new FakeAppServer(root)
+    const original = app.call.bind(app)
+    let activeItemReads = 0
+    let maxActiveItemReads = 0
+    vi.spyOn(app, 'call').mockImplementation(async (method, params) => {
+      if (method === 'thread/turns/list') {
+        if (isRecord(params) && params.itemsView === 'full') {
+          throw new CodexAppServerError('METHOD_NOT_FOUND', 'method not found')
+        }
+        return {
+          data: [1, 2, 3].map(index => ({
+            id: `turn-${index}`,
+            status: 'completed',
+            itemsView: 'summary',
+          })),
+          nextCursor: null,
+        }
+      }
+      if (method === 'thread/items/list') {
+        const turnId = isRecord(params) && typeof params.turnId === 'string' ? params.turnId : 'unknown'
+        activeItemReads += 1
+        maxActiveItemReads = Math.max(maxActiveItemReads, activeItemReads)
+        await new Promise(resolve => setTimeout(resolve, 10))
+        activeItemReads -= 1
+        return {
+          data: [{ item: { id: `item-${turnId}`, type: 'userMessage', text: turnId } }],
+          nextCursor: null,
+        }
+      }
+      return original(method, params)
+    })
+    const domain = new CodexRemoteDomain({ enabled: true, binary: 'codex' }, logger(), () => app)
+    try {
+      await domain.start()
+      const history = await domain.call('connection-1', {
+        method: 'dsh/sessionHistory',
+        params: { threadId: 'allowed-thread' },
+      }) as { records: Array<{ event: { data: unknown } }> }
+      expect(maxActiveItemReads).toBe(3)
+      const text = history.records
+        .map(record => JSON.stringify(record.event.data))
+        .filter(value => value.includes('turn-'))
+      expect(text.join('\n')).toMatch(/turn-1[\s\S]*turn-2[\s\S]*turn-3/)
+    } finally {
+      await domain.close()
+    }
+  }, 10000)
+
   it('projects a new unmaterialized Thread as empty history so it can be followed', async () => {
     await runScenarios([
       {
@@ -922,6 +992,28 @@ describe('CodexRemoteDomain', () => {
       method: 'turn/start',
       params: { threadId: 'allowed-thread', input: [{ type: 'text', text: 'Compete' }] },
     })).rejects.toMatchObject({ code: 'CODEX_TURN_OWNED' })
+
+    // A terminal Thread status is sufficient to release the writer lease;
+    // not every App Server failure path emits turn/completed afterwards.
+    app.emit({
+      kind: 'notification',
+      method: 'thread/status/changed',
+      params: { threadId: 'allowed-thread', status: { type: 'systemError' } },
+    })
+    await flush()
+    await expect(peerTwo.call({
+      method: 'turn/start',
+      params: { threadId: 'allowed-thread', input: [{ type: 'text', text: 'Retry after failure' }] },
+    })).resolves.toMatchObject({ turn: { id: 'turn-1' } })
+    app.emit({
+      kind: 'notification',
+      method: 'turn/completed',
+      params: { threadId: 'allowed-thread', turn: { id: 'turn-1', status: 'completed', items: [] } },
+    })
+    await peerOne.call({
+      method: 'turn/start',
+      params: { threadId: 'allowed-thread', input: [{ type: 'text', text: 'Continue' }] },
+    })
 
     app.emit({
       kind: 'request',
@@ -1356,3 +1448,35 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 async function flush(): Promise<void> { await new Promise(resolve => setTimeout(resolve, 0)) }
+
+describe('codexBinaryCandidates', () => {
+  it('discovers the Windows Codex desktop build and falls back to the configured CLI', async () => {
+    const localAppData = await mkdtemp(join(tmpdir(), 'dsh-codex-bin-'))
+    cleanup.push(localAppData)
+    const binRoot = join(localAppData, 'OpenAI', 'Codex', 'bin')
+    const olderBuild = join(binRoot, 'aaaa1111')
+    const newerBuild = join(binRoot, 'bbbb2222')
+    await mkdir(olderBuild, { recursive: true })
+    await mkdir(newerBuild, { recursive: true })
+    const older = join(olderBuild, 'codex.exe')
+    const newer = join(newerBuild, 'codex.exe')
+    await writeFile(older, '')
+    await writeFile(newer, '')
+    const oldTime = new Date(Date.now() - 60_000)
+    await utimes(older, oldTime, oldTime)
+
+    const previous = process.env.LOCALAPPDATA
+    process.env.LOCALAPPDATA = localAppData
+    try {
+      // Newest build first, then the configured `codex` fallback.
+      expect(codexBinaryCandidates('codex', 'win32', join(localAppData, 'home'))).toEqual([newer, older, 'codex'])
+      // An explicitly configured binary is never replaced.
+      expect(codexBinaryCandidates('C:\\tools\\codex.exe', 'win32', '/unused')).toEqual(['C:\\tools\\codex.exe'])
+      // Non-Windows platforms keep the plain configured value when no desktop app matches.
+      expect(codexBinaryCandidates('codex', 'linux', '/unused')).toEqual(['codex'])
+    } finally {
+      if (previous === undefined) delete process.env.LOCALAPPDATA
+      else process.env.LOCALAPPDATA = previous
+    }
+  })
+})

@@ -1271,6 +1271,95 @@ describe('ClientModeRuntime Host account control', () => {
     await runtime.close()
   })
 
+  it('re-authorizes a Host whose stored credential the Server no longer accepts', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-client-host-repair-'))
+    directories.push(directory)
+    // The Server revoked the token family, but this process still holds the
+    // credential in memory and the file is still on disk, so both local checks
+    // keep claiming the Host is authorized while every credential_refresh fails
+    // with AUTH_INVALID. Signing in again must repair the Host instead of
+    // silently skipping it until the process restarts.
+    const host = {
+      hostStatus: vi.fn(() => ({
+        configured: true,
+        online: false,
+        reconnecting: false,
+        error: 'AUTH_INVALID',
+        authorized: true,
+        accountRequired: true,
+      })),
+      hasStoredAuthorization: vi.fn(async () => true),
+      reconnectHost: vi.fn(),
+      clearHostAuthorization: vi.fn(),
+      authorizeHostAsOwned: vi.fn(),
+      authorizeHostWithAccount: vi.fn(),
+      authorizeHostWithCode: vi.fn(),
+    } satisfies HostAuthorizationControl
+    const authenticate = vi.fn(async () => ({ accessToken: 'fresh-access-token', account: 'owner@example.com' }))
+    const runtime = new ClientModeRuntime(
+      config(),
+      new IdentityStore({ directory }),
+      {
+        bindIdentity: vi.fn(),
+        hasStoredAuthorization: vi.fn(async () => true),
+        authenticate,
+        pollOAuthQrLogin: vi.fn(async () => ({ status: 'complete' })),
+      } as unknown as ClientServerApi,
+      gateway(),
+      logger(),
+      host,
+    )
+    await runtime.start()
+    expect(host.authorizeHostAsOwned).not.toHaveBeenCalled()
+
+    await runtime.pollClientOAuthQrLogin('qr-session-identifier-0001')
+
+    expect(authenticate).toHaveBeenCalledOnce()
+    expect(host.authorizeHostAsOwned).toHaveBeenCalledWith('fresh-access-token', 'owner@example.com')
+    await runtime.close()
+  })
+
+  it('leaves a working Host authorization untouched after signing in', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-client-host-keep-'))
+    directories.push(directory)
+    const host = {
+      hostStatus: vi.fn(() => ({
+        configured: true,
+        online: true,
+        reconnecting: false,
+        authorized: true,
+        accountRequired: false,
+      })),
+      hasStoredAuthorization: vi.fn(async () => true),
+      reconnectHost: vi.fn(),
+      clearHostAuthorization: vi.fn(),
+      authorizeHostAsOwned: vi.fn(),
+      authorizeHostWithAccount: vi.fn(),
+      authorizeHostWithCode: vi.fn(),
+    } satisfies HostAuthorizationControl
+    const authenticate = vi.fn(async () => ({ accessToken: 'fresh-access-token', account: 'owner@example.com' }))
+    const runtime = new ClientModeRuntime(
+      config(),
+      new IdentityStore({ directory }),
+      {
+        bindIdentity: vi.fn(),
+        hasStoredAuthorization: vi.fn(async () => true),
+        authenticate,
+        pollOAuthQrLogin: vi.fn(async () => ({ status: 'complete' })),
+      } as unknown as ClientServerApi,
+      gateway(),
+      logger(),
+      host,
+    )
+    await runtime.start()
+
+    await runtime.pollClientOAuthQrLogin('qr-session-identifier-0002')
+
+    expect(authenticate).not.toHaveBeenCalled()
+    expect(host.authorizeHostAsOwned).not.toHaveBeenCalled()
+    await runtime.close()
+  })
+
   it('requires local Host authorization before listing devices', async () => {
     const rows = ['ACCOUNT_AUTH_REQUIRED', 'DEVICE_OWNERSHIP_REQUIRED', 'DEVICE_REVOKED', 'AUTH_INVALID', 'TOKEN_EXPIRED'] as const
     await runScenarios(
@@ -1318,6 +1407,82 @@ describe('ClientModeRuntime Host account control', () => {
     )
   })
 
+  it('hydrates paginated and legacy directories with bounded authorization work and stable order', async () => {
+    await runScenarios([50, 301].map(pageSize => ({ name: `page size ${pageSize}`, run: async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'dsh-directory-pages-'))
+      directories.push(directory)
+      const identityKey = generateKeyPair(new Uint8Array(32).fill(21)).publicKey
+      const hosts = Array.from({ length: 301 }, (_, i) => ({ deviceId: `host-${i}`, name: `Host ${i}`,
+        role: 'host' as const, platform: 'linux', membershipId: `membership-${i}`, identityKey }))
+      let active = 0, peak = 0, completed = 0
+      const server = {
+        baseUrl: 'https://remote.test', bindIdentity() {},
+        async *devicePages() {
+          for (let i = 0; i < hosts.length; i += pageSize) {
+            expect(completed).toBe(i)
+            yield hosts.slice(i, i + pageSize)
+          }
+        },
+        async deviceFor(id: string) {
+          active++; peak = Math.max(peak, active)
+          try {
+            if (active > 8) throw new Error('directory request overload')
+            await new Promise(resolve => setTimeout(resolve, Number(id.slice(5)) % 3))
+            return hosts.find(host => host.deviceId === id)!
+          } finally { active-- }
+        },
+        async presenceFor() { completed++; return { online: true } },
+      } as unknown as ClientServerApi
+      const identities = new IdentityStore({ directory })
+      const runtime = new ClientModeRuntime(config(), identities, server, gateway(), logger())
+      await runtime.start()
+      try {
+        const devices = await runtime.devices()
+        expect(devices.map(device => device.deviceId)).toEqual(hosts.map(host => host.deviceId))
+        expect(devices.every(device => device.online)).toBe(true)
+        expect(peak).toBeGreaterThan(1)
+        expect(peak).toBeLessThanOrEqual(8)
+        expect(completed).toBe(301)
+        expect(hosts.every(host => identities.trustedPeer(host.deviceId)?.publicKey === identityKey)).toBe(true)
+      } finally { await runtime.close() }
+    } })), cleanupScenario1)
+  })
+
+  it('cancels queued discovery without starting another page or pinning late identities', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-directory-cancel-'))
+    directories.push(directory)
+    let ready!: () => void
+    const started = new Promise<void>(resolve => { ready = resolve })
+    let calls = 0, pages = 0
+    const hosts = Array.from({ length: 50 }, (_, i) => ({ deviceId: `host-${i}`, name: `Host ${i}`,
+      platform: 'linux', membershipId: `membership-${i}` }))
+    const presenceFor = vi.fn()
+    const server = { bindIdentity() {},
+      async *devicePages() { pages++; yield hosts; pages++; yield hosts },
+      async deviceFor(_id: string, signal: AbortSignal) {
+        calls++
+        return new Promise((_, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+          if (calls === 8) ready()
+        })
+      }, presenceFor,
+    } as unknown as ClientServerApi
+    const identities = new IdentityStore({ directory })
+    const runtime = new ClientModeRuntime(config(), identities, server, gateway(), logger())
+    await runtime.start()
+    const controller = new AbortController()
+    const rejected = expect(runtime.devices(controller.signal)).rejects.toThrow('cancel discovery')
+    try {
+      await started
+      controller.abort(new Error('cancel discovery'))
+      await rejected
+      expect(calls).toBe(8)
+      expect(pages).toBe(1)
+      expect(presenceFor).not.toHaveBeenCalled()
+      expect(identities.trustedPeer('host-0')).toBeUndefined()
+    } finally { controller.abort(); await runtime.close() }
+  })
+
   it('pins Host identity from an account-authorized device detail and rejects key replacement', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-client-trust-'))
     directories.push(directory)
@@ -1328,12 +1493,12 @@ describe('ClientModeRuntime Host account control', () => {
     const server = {
       baseUrl: 'https://dsh.r2049.cn',
       bindIdentity: vi.fn(),
-      listDevices: vi.fn(async () => [{
+      devicePages: async function* () { yield [{
         deviceId: 'host-device-1',
         name: 'Workstation',
         platform: 'linux',
         membershipId: 'membership-1',
-      }]),
+      }] },
       deviceFor: vi.fn(async () => ({
         deviceId: 'host-device-1',
         name: 'Workstation',
@@ -1391,6 +1556,7 @@ describe('ClientModeRuntime Host account control', () => {
 function config(): ResolvedConfig {
   return {
     terminal: { enabled: false },
+    sidebar: { entry: 'standard' },
     loopback: { ports: [] },
     enabled: true,
     role: 'both',
@@ -1398,6 +1564,7 @@ function config(): ResolvedConfig {
     deviceName: 'Local Harness',
     forceRelay: false,
     identity: { requireVerifiedPeer: false },
+    rotatePinnedPeerKey: false,
     logLevel: 'error',
     reconnect: { enabled: true, initialDelayMs: 100, maxDelayMs: 1_000, jitter: 0 },
     codex: { enabled: false, binary: 'codex' },

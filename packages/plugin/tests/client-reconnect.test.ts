@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RemoteClientCore } from '@dsh-remote/client-core'
 import { BaseTransport } from '@dsh-remote/webrtc'
-import { createRpcResponse, decodeMessage, encodeMessage } from '@dsh-remote/protocol'
+import { createEvent, createRpcResponse, decodeMessage, encodeMessage } from '@dsh-remote/protocol'
 import { afterEach, expect, it, vi } from 'vitest'
 import { runScenarios } from '../../../scripts/test-scenarios.mjs'
 import { ClientModeRuntime, remoteHostFeatures } from '../src/client-runtime.js'
@@ -19,16 +19,20 @@ import type { RemoteStatus } from '../src/client/types.js'
 class Carrier extends BaseTransport {
   connected = true
   reply = true
+  sendGate?: Promise<void>
+  responseFor?: (request: ReturnType<typeof decodeMessage>) => unknown
   sent: ReturnType<typeof decodeMessage>[] = []
   async connect() {}
   async close() { this.connected = false }
   async send(bytes: Uint8Array) {
     const request = decodeMessage(bytes)
     this.sent.push(request)
-    if (this.reply) this.emit(encodeMessage(createRpcResponse(request.id, { ok: true, value: 'existing-host-session' })))
+    await this.sendGate
+    if (this.reply) this.emit(encodeMessage(createRpcResponse(request.id, this.responseFor?.(request) ?? { ok: true, value: 'existing-host-session' })))
   }
   getStats() { return { connected: this.connected, mode: this.connected ? 'Relay' as const : 'Disconnected' as const } }
   drop(error?: Error) { this.connected = false; this.emitClose(error) }
+  pushEvent(event: 'harness.remote.frame', data: unknown) { this.emit(encodeMessage(createEvent(event, data))) }
 }
 
 let directory: string | undefined
@@ -46,15 +50,26 @@ afterEach(cleanup)
 async function fixture(enabled = true) {
   directory = await mkdtemp(join(tmpdir(), 'remote-reconnect-'))
   const localInvoke = vi.fn(async () => 'local')
-  const gateway: TypertGatewayLike & { dispatchRpc: () => Promise<{ ok: true }> } = {
+  const gateway: TypertGatewayLike & {
+    dispatchRpc: (_endpoint: string, _payload: unknown, _signal: AbortSignal) => Promise<{ ok: true }>
+    openWireStream: (_endpoint: string, _payload: unknown, _signal: AbortSignal) => Promise<AsyncIterable<unknown>>
+  } = {
     invoke: localInvoke,
     dispatchRpc: async () => ({ ok: true }),
-    wireStream: { open: async () => (async function* () {})(), failure: () => ({ code: 'internal', message: '', details: {} }) },
+    openWireStream: async () => (async function* () {})(),
+    wireStream: { open: async () => (async function* () {})(), failure: error => {
+      const failure = error as { code?: unknown; message?: unknown }
+      return {
+        code: typeof failure?.code === 'string' ? failure.code : 'internal',
+        message: typeof failure?.message === 'string' ? failure.message : '',
+        details: {},
+      }
+    } },
   }
   runtime = new ClientModeRuntime(
     resolveConfig({ reconnect: enabled ? { initialDelayMs: 100, maxDelayMs: 1000, jitter: 0 } : false }),
     new IdentityStore({ directory }),
-    { bindIdentity: vi.fn(), revokeCurrentDevice: vi.fn(async () => undefined) } as unknown as ClientServerApi,
+    { bindIdentity: vi.fn(), revokeCurrentDevice: vi.fn(async () => undefined), authorizeWithAccount: vi.fn(async () => ({})) } as unknown as ClientServerApi,
     gateway, { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() } as unknown as SafeLogger,
   )
   await runtime.start()
@@ -74,6 +89,12 @@ async function fixture(enabled = true) {
   const connect = vi.spyOn(connection, 'connect').mockImplementation(makeRemote)
   await runtime.setMode('remote', 'host-1')
   vi.useFakeTimers()
+  // ClientReconnect draws its FULL-JITTER backoff from Math.random(); pin it to
+  // the top of each window so the deterministic timer assertions below mean
+  // "waits the full window", not "waits somewhere in it". 1 also keeps the
+  // legacy 0-draw behaviour of the first attempt out of the sequence: the first
+  // retry now waits a full initialDelayMs.
+  vi.spyOn(Math, 'random').mockReturnValue(0.999999)
   return { runtime, gateway, localInvoke, connect, remotes, makeRemote }
 }
 
@@ -82,37 +103,158 @@ it('recovers the selected Host with bounded backoff and fresh reads without repl
   const first = f.remotes[0]!.carrier
   first.reply = false
   const prompt = f.gateway.invoke({ namespace: 'session', method: 'prompt', args: { sessionId: 'existing-host-session' } })
-  const rejected = expect(prompt).rejects.toMatchObject({ code: 'TRANSPORT_CLOSED' })
+  const approval = f.gateway.dispatchRpc('$events/result', { args: {
+    clientId: 'event-client', eventId: 'approval-1', outcome: { kind: 'result', value: 'allowed-once' },
+  } }, new AbortController().signal)
+  const rejectedPrompt = expect(prompt).rejects.toMatchObject({ code: 'TRANSPORT_CLOSED' })
+  const rejectedApproval = expect(approval).resolves.toMatchObject({ ok: false, error: { code: 'TRANSPORT_CLOSED' } })
+  expect(first.sent[1]).toMatchObject({ payload: { method: 'harness.remote.call', params: { endpoint: '$events/result' } } })
   f.connect.mockRejectedValueOnce(new TypeError('fetch failed'))
     .mockRejectedValueOnce(Object.assign(new Error('HTTP 503'), { code: 'INTERNAL_ERROR', retryable: true }))
     .mockRejectedValueOnce(new Error('offline')).mockRejectedValueOnce(new Error('offline')).mockRejectedValueOnce(new Error('offline'))
   first.drop()
-  await rejected
+  await Promise.all([rejectedPrompt, rejectedApproval])
   expect(f.runtime.status()).toMatchObject({ mode: 'remote', connected: false, target: { deviceId: 'host-1' } })
   await expect(f.gateway.invoke({ namespace: 'session', method: 'list', args: {} })).rejects.toMatchObject({ code: 'remote/disconnected' })
-  await vi.advanceTimersByTimeAsync(99)
-  expect(f.connect).toHaveBeenCalledTimes(1)
-  await vi.advanceTimersByTimeAsync(1)
-  expect(f.connect).toHaveBeenCalledTimes(2)
-  await vi.advanceTimersByTimeAsync(199)
-  expect(f.connect).toHaveBeenCalledTimes(2)
-  await vi.advanceTimersByTimeAsync(1)
-  expect(f.connect).toHaveBeenCalledTimes(3)
-  await vi.advanceTimersByTimeAsync(400)
-  await vi.advanceTimersByTimeAsync(800)
-  await vi.advanceTimersByTimeAsync(1000)
-  expect(f.connect).toHaveBeenCalledTimes(6)
-  await vi.advanceTimersByTimeAsync(999)
-  expect(f.connect).toHaveBeenCalledTimes(6)
-  await vi.advanceTimersByTimeAsync(1)
+  await expect(f.gateway.dispatchRpc('$events/result', { args: {
+    clientId: 'event-client', eventId: 'approval-1', outcome: { kind: 'result', value: 'allowed-once' },
+  } }, new AbortController().signal)).resolves.toMatchObject({ ok: false, error: { code: 'remote/disconnected' } })
+  expect(first.sent).toHaveLength(2)
+  // Every retry inside ClientReconnect waits a full-jitter window over
+  // [0, maxDelayMs] (1000ms here, Math.random() pinned to the top). Assert the
+  // property that matters: no two attempts land inside the same window.
+  const sample = async (span: number): Promise<number[]> => {
+    const marks: number[] = []
+    const startCalls = f.connect.mock.calls.length
+    for (let elapsed = 0; elapsed < span; elapsed += 100) {
+      await vi.advanceTimersByTimeAsync(100)
+      if (f.connect.mock.calls.length > startCalls + marks.length) marks.push(elapsed + 100)
+    }
+    return marks
+  }
+  const marks = await sample(3_100)
+  expect(marks.length).toBeGreaterThanOrEqual(2)
+  // Pinned to the top of the window, attempts land ~1000ms apart.
+  for (let index = 1; index < marks.length; index++) {
+    expect(marks[index]! - marks[index - 1]!).toBeGreaterThanOrEqual(1000)
+  }
+  // The mocked attempts keep failing (three queued failures) until one lands;
+  // the recovery only completes once a fresh carrier is up.
+  await vi.advanceTimersByTimeAsync(10_000)
   expect(f.runtime.status()).toMatchObject({ connected: true, recoveryGeneration: 1, target: { deviceId: 'host-1' } })
-  expect(f.remotes[1]!.carrier.sent).toEqual([])
+  expect(f.remotes.at(-1)!.carrier.sent).toEqual([])
   await expect(f.gateway.invoke({ namespace: 'session', method: 'list', args: {} })).resolves.toBe('existing-host-session')
   expect(f.localInvoke).not.toHaveBeenCalled()
-  expect(first.sent).toHaveLength(1)
-  f.remotes[1]!.carrier.drop()
-  await vi.advanceTimersByTimeAsync(100)
+  expect(first.sent).toHaveLength(2)
+  f.remotes.at(-1)!.carrier.drop()
+  await vi.advanceTimersByTimeAsync(1000)
   expect(f.runtime.status()).toMatchObject({ connected: true, recoveryGeneration: 2 })
+})
+
+it.each(['close', 'retry'] as const)('exposes terminal client authorization on %s and clears it after switching back', async phase => {
+  const f = await fixture()
+  const rejection = Object.assign(new Error('credential rejected'), { code: 'AUTH_INVALID', retryable: false })
+  if (phase === 'retry') f.connect.mockRejectedValueOnce(rejection)
+  f.remotes[0]!.carrier.drop(phase === 'close' ? rejection : undefined)
+  if (phase === 'retry') expect(f.runtime.status()).not.toHaveProperty('clientAuthRequired')
+  await vi.advanceTimersByTimeAsync(60_000)
+  expect(f.runtime.status()).toMatchObject({ connected: false, clientAuthRequired: true, target: { deviceId: 'host-1' } })
+  expect(f.connect).toHaveBeenCalledTimes(phase === 'close' ? 1 : 2)
+  await expect(f.gateway.invoke({ namespace: 'session', method: 'list', args: {} })).rejects.toMatchObject({ code: 'remote/disconnected' })
+  if (phase === 'close') await f.runtime.setMode('local')
+  else {
+    await f.runtime.authorizeClientWithAccount('test@example.invalid', 'test')
+    expect(f.runtime.status()).not.toHaveProperty('clientAuthRequired')
+    await f.runtime.setMode('remote', 'host-1')
+    expect(f.runtime.status()).toMatchObject({ connected: true, target: { deviceId: 'host-1' } })
+  }
+  expect(f.runtime.status()).not.toHaveProperty('clientAuthRequired')
+})
+
+it('does not replay an approval whose old carrier send settles after recovery', async () => {
+  const f = await fixture()
+  const first = f.remotes[0]!.carrier
+  let finishSend!: () => void
+  first.sendGate = new Promise<void>(resolve => { finishSend = resolve })
+  const approval = f.gateway.dispatchRpc('$events/result', { args: {
+    clientId: 'event-client', eventId: 'approval-2', outcome: { kind: 'result', value: 'allowed-once' },
+  } }, new AbortController().signal)
+  const rejected = expect(approval).resolves.toMatchObject({ ok: false, error: { code: 'TRANSPORT_CLOSED' } })
+  expect(first.sent).toHaveLength(1)
+  expect(first.sent[0]).toMatchObject({ payload: { method: 'harness.remote.call', params: { endpoint: '$events/result' } } })
+
+  first.drop()
+  await rejected
+  await vi.advanceTimersByTimeAsync(1000)
+  expect(f.runtime.status()).toMatchObject({ connected: true, recoveryGeneration: 1 })
+  expect(f.remotes[1]!.carrier.sent).toEqual([])
+
+  finishSend()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(f.remotes[1]!.carrier.sent).toEqual([])
+  expect(f.localInvoke).not.toHaveBeenCalled()
+})
+
+it('reopens a read stream and loads Host history from the recovered carrier', async () => {
+  const f = await fixture()
+  const first = f.remotes[0]!.carrier
+  const record = (seq: number) => ({ type: 'event', event: { seq, time: seq, type: 'test/entry', data: { text: `host-${seq}` } } })
+  const respond = (cursor: number) => (request: ReturnType<typeof decodeMessage>): unknown => {
+    const payload = request.payload as { method: string; params?: { endpoint?: string } }
+    if (payload.method === 'harness.transport.describe') return { capabilities: [] }
+    if (payload.method === 'harness.remote.stream.open') return { opened: true }
+    if (payload.method === 'harness.remote.call' && payload.params?.endpoint === 'session/history') {
+      return { ok: true, value: { records: [record(cursor)], throughSeq: cursor } }
+    }
+    return { ok: true, value: 'existing-host-session' }
+  }
+  const streamId = (carrier: Carrier): string => {
+    const opening = carrier.sent.find(request => (request.payload as { method?: string }).method === 'harness.remote.stream.open')
+    return (opening?.payload as { params?: { streamId?: string } } | undefined)?.params?.streamId ?? ''
+  }
+  const request = { args: { request: { sessionId: 'existing-host-session' } } }
+  const oldLifetime = new AbortController()
+  const signal = new AbortController().signal
+  first.responseFor = respond(3)
+  const oldStream = await f.gateway.openWireStream('session/follow', request, oldLifetime.signal)
+  const oldIterator = oldStream[Symbol.asyncIterator]()
+  const oldId = streamId(first)
+  expect(oldId).not.toBe('')
+  first.pushEvent('harness.remote.frame', { streamId: oldId, hasValue: true, value: {
+    type: 'snapshot', cursor: 3, records: [record(3)], hasMore: false,
+  } })
+  await expect(oldIterator.next()).resolves.toMatchObject({ value: { type: 'snapshot', cursor: 3 } })
+  const settled = vi.fn()
+  const interrupted = oldIterator.next().catch(error => { settled(); throw error })
+  const released = expect(interrupted).rejects.toMatchObject({ code: 'TRANSPORT_CLOSED' })
+
+  first.drop()
+  // Main's full-jitter backoff draws from [0, maxDelayMs] even for the first
+  // retry; the fixture pins Math.random() to the top of the window.
+  await vi.advanceTimersByTimeAsync(1000)
+  expect(f.runtime.status()).toMatchObject({ connected: true, recoveryGeneration: 1 })
+  expect(settled).not.toHaveBeenCalled()
+  // The native carrier reset cancels its old readers after authentication.
+  oldLifetime.abort()
+  await released
+
+  const next = f.remotes[1]!.carrier
+  next.responseFor = respond(8)
+  const newStream = await f.gateway.openWireStream('session/follow', request, signal)
+  const newIterator = newStream[Symbol.asyncIterator]()
+  const newId = streamId(next)
+  expect(newId).not.toBe('')
+  expect(newId).not.toBe(oldId)
+  next.pushEvent('harness.remote.frame', { streamId: newId, hasValue: true, value: {
+    type: 'snapshot', cursor: 8, records: [record(8)], hasMore: false,
+  } })
+  await expect(newIterator.next()).resolves.toMatchObject({ value: { type: 'snapshot', cursor: 8, records: [record(8)] } })
+  await expect(f.gateway.dispatchRpc('session/history', request, signal)).resolves.toMatchObject({
+    ok: true, value: { throughSeq: 8, records: [record(8)] },
+  })
+  expect(next.sent.filter(frame => (frame.payload as { method?: string }).method === 'harness.remote.call')).toHaveLength(1)
+  expect(f.localInvoke).not.toHaveBeenCalled()
+  await newIterator.return?.()
 })
 
 it('stops timers and retires late candidates on exit, sign-out, shutdown and Host replacement', async () => {
@@ -126,7 +268,7 @@ it('stops timers and retires late candidates on exit, sign-out, shutdown and Hos
         return new Promise(yes => { resolve = yes })
       })
       f.remotes[0]!.carrier.drop()
-      if (phase === 'connecting') await vi.advanceTimersByTimeAsync(100)
+      if (phase === 'connecting') await vi.advanceTimersByTimeAsync(1000)
       else f.connect.mockReset().mockImplementation(f.makeRemote)
       if (action === 'exit') await f.runtime.setMode('local')
       else if (action === 'sign-out') await f.runtime.clearClientAuthorization()

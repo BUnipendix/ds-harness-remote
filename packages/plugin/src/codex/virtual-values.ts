@@ -1,5 +1,8 @@
 export const CODEX_SESSION_PREFIX = 'codex:'
 
+/** The strict Remote history schema accepts at most 200 messages per page. */
+export const CODEX_HISTORY_PAGE_MAX_MESSAGES = 200
+
 export type JsonRecord = Record<string, unknown>
 
 export interface CodexClientLike {
@@ -61,6 +64,11 @@ export function optionalPositiveInteger(value: unknown): number | undefined {
   const parsed = optionalInteger(value)
   if (parsed !== undefined && parsed <= 0) throw new Error('The CodeX History page size is invalid.')
   return parsed
+}
+
+/** Cap native DSH's larger history window requests at the Remote page limit. */
+export function boundedCodexHistoryPageSize(value: number | undefined): number | undefined {
+  return value === undefined ? undefined : Math.min(value, CODEX_HISTORY_PAGE_MAX_MESSAGES)
 }
 
 export function requiredString(value: unknown, field: string): string {

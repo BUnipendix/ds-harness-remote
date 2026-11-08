@@ -2,7 +2,7 @@ import type { TransportStats } from '@dsh-remote/protocol'
 import type { AdaptiveConnectionDetails } from '@dsh-remote/webrtc'
 import { strings as zhCN } from './locales/i18n'
 
-export type AgentBackend = 'harness' | 'codex' | 'cursor' | 'antigravity' | 'pi' | 'opencode' | 'claude'
+export type AgentBackend = 'harness' | 'codex' | 'cursor' | 'antigravity' | 'pi' | 'opencode' | 'claude' | 'hermes'
 
 export type ConnectionPhase =
   | 'disconnected'
@@ -352,6 +352,8 @@ export interface ChatImage {
   uri?: string
   name?: string
   mediaType?: string
+  /** Encoded byte length of a durable Host attachment, required by the 0.2.2 read contract. */
+  bytes?: number
   width?: number
   height?: number
 }
@@ -510,9 +512,14 @@ export function transportPreferenceOptions(): TransportPreferenceOption[] {
 
 export type {
   ScheduleCatalogEntry,
+  ScheduleCreateRequest,
   ScheduleDeleteResult,
   ScheduleDeliveryHistoryResult,
   ScheduleDeliveryReceipt,
   ScheduleDeliveryRecord,
   ScheduleKind,
+  ScheduleRecord,
+  ScheduleTimingChange,
+  ScheduleUpdateRequest,
+  ScheduleUpdateResult,
 } from '@dsh-remote/client-core'

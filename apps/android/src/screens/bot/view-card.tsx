@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
-import { PanResponder, ScrollView, Switch, Text, TextInput, View } from 'react-native'
+import { PanResponder, ScrollView, Text, TextInput, View } from 'react-native'
+import { Toggle } from '../../ui/toggle'
 import { Minus, Plus } from 'lucide-react-native'
 import { strings as s } from '../../locales/i18n'
 import { object, objects, text, type BotObject } from '../../services/bot-catalog'
@@ -72,7 +73,7 @@ function ViewNode(props: NodeProps) {
     case 'sources': return <View style={styles.section}>{objects(node.items).map((item, i) => <View key={i}><Text style={styles.body}>{text(item.label)}</Text><NativeMarkdown text={`<${text(item.url)}>`} /></View>)}</View>
     case 'html': return <View style={styles.section}>{!!text(node.summary) && <Text selectable style={styles.body}>{text(node.summary)}</Text>}<Text style={styles.muted}>{s.bots.htmlFallback}</Text></View>
     case 'slider': case 'number': return <NumberInput node={node} value={input} change={value => change(id, value)} />
-    case 'toggle': return <View style={styles.row}><Text style={[styles.body, styles.grow]}>{text(node.label)}</Text><Switch accessibilityLabel={text(node.label)} value={input === true} onValueChange={value => change(id, value)} trackColor={{ true: colors.primary }} /></View>
+    case 'toggle': return <View style={styles.row}><Text style={[styles.body, styles.grow]}>{text(node.label)}</Text><Toggle accessibilityLabel={text(node.label)} value={input === true} onValueChange={value => change(id, value)} trackColor={{ true: colors.primary }} /></View>
     case 'choice': return <View style={styles.section}><Text style={styles.body}>{text(node.label)}</Text>{objects(node.options).map((option, i) => <BotChoice key={i} label={text(option.label)} checked={input === choiceValue(option)} disabled={false} onPress={() => change(id, choiceValue(option))} />)}</View>
     case 'options': return <View style={styles.section}>
       {objects(node.options).map((option, i) => {

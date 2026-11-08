@@ -8,12 +8,18 @@ describe('plugin config', () => {
       role: 'host',
       hostControl: { enabled: true },
       terminal: { enabled: true },
+      remoteTools: { enabled: true },
       forceRelay: false,
-      reconnect: { enabled: true, initialDelayMs: 1_000, maxDelayMs: 30_000, jitter: 0.2 },
+      reconnect: { enabled: true, initialDelayMs: 4_000, maxDelayMs: 30_000, jitter: 0.2 },
       codex: { enabled: true, binary: 'codex' },
       cursor: { enabled: false, binary: 'agent' },
     })
     expect(resolveConfig({}, { DSH_REMOTE_TERMINAL_ENABLED: 'false' }).terminal.enabled).toBe(false)
+  })
+
+  it('keeps Remote Tools enabled by default while allowing an explicit opt-out', () => {
+    expect(resolveConfig({}, {}).remoteTools?.enabled).toBe(true)
+    expect(resolveConfig({ remoteTools: { enabled: false } }, {}).remoteTools?.enabled).toBe(false)
   })
 
   it('allows the default-on Codex domain to be disabled and rejects obsolete workspace filters', () => {
@@ -50,6 +56,17 @@ describe('plugin config', () => {
     expect(config.codex).toEqual({ enabled: false, binary: '/new/codex' })
     expect(config.acp?.backends.some(item => item.id === 'kimi')).toBe(false)
     expect(resolveConfig({ acp: { enabled: false, backends: [{ id: 'codex', enabled: true }] } }, {}).codex.enabled).toBe(false)
+  })
+
+  it('registers the Hermes backend as an explicitly enabled standard ACP backend', () => {
+    const off = resolveConfig({}, {})
+    expect(off.acp?.backends.find(item => item.id === 'hermes')).toMatchObject({ enabled: false, command: 'hermes', args: ['acp'] })
+    const on = resolveConfig({ acp: { enabled: true, backends: [{ id: 'hermes', enabled: true }] } }, {})
+    expect(on.acp?.backends.find(item => item.id === 'hermes')).toMatchObject({ enabled: true, command: 'hermes', args: ['acp'] })
+    const custom = resolveConfig({ acp: { enabled: true, backends: [{ id: 'hermes', enabled: true, command: '/opt/hermes/bin/hermes-acp', args: [], cwd: '/srv/repo' }] } }, {})
+    expect(custom.acp?.backends.find(item => item.id === 'hermes')).toEqual({
+      id: 'hermes', enabled: true, command: '/opt/hermes/bin/hermes-acp', args: [], cwd: '/srv/repo',
+    })
   })
 
   it('allows HTTP on private networks while rejecting insecure public servers and embedded credentials', () => {

@@ -70,7 +70,7 @@ ACP 工具使用独立 `dsh/toolCall` 与有 tool 参数的 stream，限编译�
 断线保留可恢复的终端状态但不重放输入；领域关闭结束其进程。Host subprocess 服务可用时使用 PTY，否则回退 pipe；
 共享桥由 Host xterm headless 保存有界屏幕并序列化重连快照，再跟随有序输出，不回放整段原始日志。
 
-Android 图片/PDF 最大 8 MiB、Office 源文件最大 50 MiB；本地打包 PDF.js/xterm 渲染器，生成源文件不提交。
+Android 图片最大 8 MiB、PDF 最大 16 MiB、Office 源文件最大 50 MiB；本地打包 PDF.js/xterm 渲染器，生成源文件不提交。
 PDF 预览不执行脚本或打开外链，普通预览不创建明文文件缓存。Android 另有显式“保存到手机”操作，使用有界临时缓存并在完成或取消后清理，详见 [Android 说明](../../../apps/android/README.md)。真机与跨设备效果另行验收。
 
 ## 5. Loopback 预览

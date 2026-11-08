@@ -69,7 +69,7 @@ Control channel 使用可读 JSON frame 承载：
 - WebRTC offer、answer 与 ICE candidate；
 - `transport.selected`；
 - opaque Noise handshake bytes；
-- Relay 模式下的 Noise ciphertext；
+- Relay assignment metadata and legacy Relay ciphertext；
 - ping/pong 与连接级错误。
 
 Control frame 不得包含 Harness 业务明文。Server 需要读取路由信息，但只能把 Noise handshake 与 transport ciphertext 当作不透明字节转发。
@@ -79,7 +79,9 @@ Control frame 不得包含 Harness 业务明文。Server 需要读取路由信�
 连接建立时，双方通过 capability 与偏好选择数据路径：
 
 - WebRTC 成功时，Noise ciphertext 直接作为 ordered DataChannel binary message 发送；
-- WebRTC 不可用或失败时，Noise ciphertext 经 Control WebSocket 的 `relay` frame 转发。
+- WebRTC 不可用或失败时，具备 `transport.relay.attach` 的双方使用 Server 分配的 Relay
+  data WebSocket，先发送 `relay.attach`，再通过该 socket 转发 Noise ciphertext；旧客户端
+  继续经 Control WebSocket 的 `relay` frame 转发。
 
 上层只依赖统一的 `RemoteTransport`，不会因为路径不同而改写 Harness RPC 或降低加密级别。
 
@@ -90,10 +92,12 @@ Control frame 不得包含 Harness 业务明文。Server 需要读取路由信�
 1. Host 与 Client 向 Server 建立经过 device credential 认证的出站 WSS。
 2. 双方在 `hello` / `hello.ack` 中协商协议版本、frame limits 与 `transport.*` capability。
 3. Client 请求目标 Host，Server 校验同账号 membership、设备状态和 Host presence。
-4. Server 创建 `connectionId`，通知 Host，并保持该连接的 signaling 与 handshake 转发顺序。
+4. Server 创建 `connectionId`，通知 Host；若双方支持 `transport.relay.attach`，同时分配
+   `relayEndpoint`、短期 `relayTicket`、`relayNodeId` 和 `relayEpoch`。
 5. 如果双方和当前运行环境支持 WebRTC，Client 发起 offer/answer/ICE 协商；否则直接选择 Relay。
 6. Initiator 确认 DataChannel 可用后发送 `transport.selected`。Host 在同一 connection 上确认一致的路径。
-7. 双方通过 Control channel 交换 Noise IK handshake；完成后才开始业务通信。
+7. 双方通过 Control channel 交换 Noise IK handshake；完成后才开始业务通信。Relay data
+   socket 只承载 opaque `relay` frame 和心跳，不能承载明文或永久凭据。
 
 `transport.selected` 与 Noise handshake 的顺序是安全状态的一部分。Host 不会仅根据本地异步 RTC 回调猜测路径；乱序到达时会暂存握手，待数据面选择明确后继续。安全通道建立后，迟到或冲突的选路消息不能改写现有连接。
 
@@ -104,7 +108,7 @@ Control frame 不得包含 Harness 业务明文。Server 需要读取路由信�
 | `LAN` | WebRTC DataChannel | 两端位于可直达的本地网络 | 否 |
 | `P2P` | WebRTC DataChannel | 公网、NAT 穿透或 overlay 网络直连 | 否 |
 | `TURN` | WebRTC DataChannel 经 TURN relay | 无法直接打洞，但允许 TURN | TURN 转发 Noise ciphertext |
-| `Relay` | WSS Control channel 的 `relay` frame | WebRTC 不可用、协商失败或网络受限 | Remote Server 转发 Noise ciphertext |
+| `Relay` | 独立 WSS data WebSocket 的 `relay` frame；旧客户端使用 Control channel | WebRTC 不可用、协商失败或网络受限 | Relay node 转发 Noise ciphertext |
 
 ### LAN
 
@@ -120,7 +124,11 @@ P2P 使用 ICE/STUN 尝试让 Client 与 Host 直接交换 DataChannel 流量。
 
 ### Relay
 
-Relay 通过已建立的 WSS 转发 Base64URL 编码的 Noise ciphertext。它不要求 UDP 或端到端可达性，通常对企业代理和严格 NAT 更稳健，但延迟与 Server 带宽开销可能高于直连。Server 禁止解密、解析、持久化或记录 Relay ciphertext。
+Relay 通过分配的 WSS data endpoint 转发 Base64URL 编码的 Noise ciphertext。双方先使用绑定
+`nodeId`、`connectionId`、设备和 `epoch` 的短期 ticket 发送 `relay.attach`，收到 `relay.ready`
+后才发送业务帧。Relay node 不需要数据库或主服务密钥；它不要求 UDP 或端到端可达性，通常对
+企业代理和严格 NAT 更稳健。旧客户端没有 attach 能力时，Server 保留 Control WebSocket
+兼容路径。Relay node 和 Server 均禁止解密、解析、持久化或记录 Relay ciphertext。
 
 ## 5. 自适应尝试与降级
 

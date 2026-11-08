@@ -8,8 +8,7 @@ import { normalizeServerUrl } from './config.js'
 import { PLUGIN_VERSION } from './version.js'
 
 interface ErrorEnvelope {
-  error?: { code?: unknown; message?: unknown; retryable?: unknown }
-  detail?: unknown
+  error: { code: string; message: string; retryable: boolean }
 }
 
 interface WebLoginResponse {
@@ -322,7 +321,11 @@ export class HostServerApi {
     this.credentials = await this.withRefreshLock(async () => {
       // Another process may have rotated the token while we waited for the lock.
       const stored = await this.store.load(this.baseUrl, identity.deviceId)
-      if (stored === undefined || stored.refreshTokenExpiresAt <= Date.now()) return this.register(identity)
+      if (stored === undefined || stored.refreshTokenExpiresAt <= Date.now()) {
+        // A rejected Client read must not implicitly register a signed-out device.
+        if (this.role === 'client') throw new ServerApiError('ACCOUNT_AUTH_REQUIRED', 'Client sign-in is required.', false)
+        return this.register(identity)
+      }
       if (stored.accessToken !== rejectedAccessToken && stored.accessTokenExpiresAt > Date.now() + 30_000) {
         return stored
       }
@@ -351,7 +354,15 @@ export class HostServerApi {
       })
     } catch (error) {
       if (error instanceof ServerApiError) {
-        throw new ServerApiError(error.code, error.message, error.retryable, error.status, 'credential_refresh')
+        // A delayed rejection must not discard credentials another writer saved.
+        if (error.code === 'AUTH_INVALID') {
+          const latest = await this.store.load(this.baseUrl, identity.deviceId)
+          if (latest !== undefined && latest.refreshToken !== stored.refreshToken &&
+              latest.refreshTokenExpiresAt > Date.now() && latest.accessTokenExpiresAt > Date.now() + 30_000) {
+            return latest
+          }
+        }
+        throw new ServerApiError(error.code, error.message, error.retryable, error.status, 'credential_refresh', error.reason)
       }
       throw error
     }
@@ -365,9 +376,36 @@ export class HostServerApi {
   }
 
   async listDevices(signal?: AbortSignal): Promise<ServerHostDevice[]> {
-    const result = await this.request<{ items?: unknown }>('/api/v1/devices', { signal })
-    if (!Array.isArray(result.items)) throw new ServerApiError('INVALID_MESSAGE', 'The Server returned an invalid device list.', false)
-    return result.items.map(parseHostDevice)
+    const devices: ServerHostDevice[] = []
+    for await (const page of this.devicePages(signal)) devices.push(...page)
+    return devices
+  }
+
+  async *devicePages(signal?: AbortSignal): AsyncGenerator<ServerHostDevice[]> {
+    let cursor: string | undefined
+    const cursors = new Set<string>()
+    const ids = new Set<string>()
+    do {
+      signal?.throwIfAborted()
+      const query = new URLSearchParams({ limit: '50' })
+      if (cursor !== undefined) query.set('cursor', cursor)
+      const result = await this.request<{ items?: unknown; nextCursor?: unknown }>(`/api/v1/devices?${query}`, { signal })
+      if (!Array.isArray(result.items)) throw new ServerApiError('INVALID_MESSAGE', 'The Server returned an invalid device list.', false)
+      const page = result.items.map(parseHostDevice)
+      const next = result.nextCursor
+      if (next !== undefined && next !== null
+        && (typeof next !== 'string' || next.length === 0 || next.length > 512 || cursors.has(next) || page.length === 0)) {
+        throw new ServerApiError('INVALID_MESSAGE', 'The Server returned an invalid device list cursor.', false)
+      }
+      for (const device of page) {
+        if (ids.has(device.deviceId)) throw new ServerApiError('INVALID_MESSAGE', 'The Server returned a duplicate device.', false)
+        ids.add(device.deviceId)
+      }
+      cursor = typeof next === 'string' ? next : undefined
+      if (cursor !== undefined) cursors.add(cursor)
+      // Older Servers may ignore limit and return all devices with no cursor.
+      yield page
+    } while (cursor !== undefined)
   }
 
   async deviceFor(peerDeviceId: string, signal?: AbortSignal): Promise<AuthorizedPeerDevice> {
@@ -453,7 +491,19 @@ export class HostServerApi {
 
   private async request<TResult>(path: string, init: RequestInit = {}): Promise<TResult> {
     const credentials = await this.authenticate()
-    return this.publicRequest<TResult>(path, init, credentials.accessToken)
+    try {
+      return await this.publicRequest<TResult>(path, init, credentials.accessToken)
+    } catch (error) {
+      // The Server may reject a bearer before its locally cached expiry.
+      // Only retry an explicitly rejected, read-only Client request, once.
+      if (this.role !== 'client' || this.identity?.deviceId !== credentials.deviceId || (init.method ?? 'GET') !== 'GET'
+        || !(error instanceof ServerApiError) || error.status !== 401
+        || (error.code !== 'AUTH_INVALID' && error.code !== 'TOKEN_EXPIRED')) throw error
+      init.signal?.throwIfAborted()
+      const next = await this.refreshCredentials(credentials.accessToken)
+      if (next.account !== credentials.account || this.identity?.deviceId !== credentials.deviceId) throw error
+      return this.publicRequest<TResult>(path, init, next.accessToken)
+    }
   }
 
   private async publicRequest<TResult>(path: string, init: RequestInit, accessToken?: string): Promise<TResult> {
@@ -479,19 +529,27 @@ export class HostServerApi {
       const body = await parseBody(response)
       signal.throwIfAborted()
       if (!response.ok) {
-        const envelope = (body ?? {}) as ErrorEnvelope
+        const envelope = isErrorEnvelope(body) ? body : undefined
+        // A gateway can challenge requests during startup. Only a protocol
+        // error envelope establishes that the device credentials were rejected.
+        if ((response.status === 401 || response.status === 403) && envelope === undefined) {
+          throw new ServerApiError('CONNECTION_FAILED', 'The Server returned an invalid authorization response.',
+            true, response.status, undefined, 'invalid_error_envelope')
+        }
         throw new ServerApiError(
-          responseErrorCode(response.status, envelope.error?.code),
-          typeof envelope.error?.message === 'string' ? envelope.error.message : 'The Server rejected the request.',
-          envelope.error?.retryable === true || response.status >= 500,
+          responseErrorCode(response.status, envelope?.error.code),
+          envelope?.error.message ?? 'The Server rejected the request.',
+          envelope?.error.retryable === true || response.status >= 500 || response.status === 429,
           response.status,
+          undefined,
+          'http_error',
         )
       }
       return body as TResult
     } catch (error) {
       if (this.lifetime.signal.aborted) throw this.lifetime.signal.reason
       if (error instanceof ServerApiError) throw error
-      throw new ServerApiError('CONNECTION_FAILED', error instanceof Error ? error.message : 'Server request failed.', true)
+      throw new ServerApiError('CONNECTION_FAILED', 'Server request failed.', true, undefined, undefined, controller.signal.aborted ? 'timeout' : 'network_error')
     } finally {
       clearTimeout(timer)
     }
@@ -536,6 +594,7 @@ export class ServerApiError extends Error {
     readonly retryable: boolean,
     readonly status?: number,
     readonly phase?: 'credential_refresh',
+    readonly reason?: 'http_error' | 'invalid_json' | 'invalid_error_envelope' | 'timeout' | 'network_error',
   ) { super(message) }
 }
 
@@ -564,13 +623,25 @@ function validateWebLogin(value: unknown): WebLoginResponse {
   }
 }
 
+function isErrorEnvelope(value: unknown): value is ErrorEnvelope {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const error = (value as Record<string, unknown>).error
+  if (typeof error !== 'object' || error === null || Array.isArray(error)) return false
+  const fields = error as Record<string, unknown>
+  return typeof fields.code === 'string' && fields.code.length > 0
+    && typeof fields.message === 'string' && typeof fields.retryable === 'boolean'
+}
+
 async function parseBody(response: Response): Promise<unknown> {
   const text = await response.text()
   if (text.length === 0) return undefined
   try {
     return JSON.parse(text)
   } catch {
-    throw new ServerApiError('INVALID_MESSAGE', 'The Server returned invalid JSON.', false, response.status)
+    const unstructuredAuth = response.status === 401 || response.status === 403
+    throw new ServerApiError(unstructuredAuth ? 'CONNECTION_FAILED' : response.ok ? 'INVALID_MESSAGE' : responseErrorCode(response.status, undefined),
+      'The Server returned invalid JSON.', unstructuredAuth || response.ok || response.status >= 500 || response.status === 429,
+      response.status, undefined, 'invalid_json')
   }
 }
 

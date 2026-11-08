@@ -11,10 +11,12 @@ import {
   createCursorWorkspace,
   createOpencodeWorkspace,
   createClaudeWorkspace,
+  createHermesWorkspace,
   createPiWorkspace,
 } from '../services/cursor'
 import { loadOpencodeCatalog, mergeOpencodeCatalog } from '../services/opencode'
 import { loadClaudeCatalog, mergeClaudeCatalog } from '../services/claude'
+import { loadHermesCatalog, mergeHermesCatalog } from '../services/hermes'
 import { loadPiCatalog, mergePiCatalog } from '../services/pi'
 import type { AndroidRemoteRuntime } from '../services/remote-runtime'
 import { saveFavoriteWorkspaces } from '../services/storage'
@@ -79,12 +81,14 @@ export function createWorkspaceActions({ set, get, connection, getConnectionGene
         if (!current()) return
         let catalog: { workspaces: WorkspaceView[]; sessions: RemoteSession[] }
         let archivedSessionIds: string[] | undefined
+        let pinnedSessionIds: string[] | undefined
         switch (backend) {
           case 'harness': {
             const proxy = scope.bind(() => connection.requireProxy())
             const [workspaces, sessions] = await Promise.all([proxy.workspaceList(), proxy.sessionList()])
             catalog = { workspaces: workspaces.items, sessions }
             archivedSessionIds = workspaces.archivedSessionIds
+            pinnedSessionIds = workspaces.pinnedSessionIds
             break
           }
           case 'codex': {
@@ -107,6 +111,9 @@ export function createWorkspaceActions({ set, get, connection, getConnectionGene
           case 'claude':
             catalog = mergeClaudeCatalog(await loadClaudeCatalog(scope.bind(() => connection.requireClaude()), get().workspaces), get().workspaces, get().sessions)
             break
+          case 'hermes':
+            catalog = mergeHermesCatalog(await loadHermesCatalog(scope.bind(() => connection.requireHermes()), get().workspaces), get().workspaces, get().sessions)
+            break
           case 'cursor':
             catalog = { workspaces: get().workspaces.filter(item => item.backend === 'cursor'), sessions: get().sessions.filter(item => item.backend === 'cursor') }
             break
@@ -119,9 +126,11 @@ export function createWorkspaceActions({ set, get, connection, getConnectionGene
           piAvailable: connection.hasPi(),
           opencodeAvailable: connection.hasOpencode(),
           claudeAvailable: connection.hasClaude(),
+          hermesAvailable: connection.hasHermes(),
           workspaces: [...state.workspaces.filter(item => (item.backend ?? 'harness') !== backend), ...catalog.workspaces],
           sessions: [...state.sessions.filter(item => (item.backend ?? 'harness') !== backend), ...catalog.sessions],
           ...(archivedSessionIds === undefined ? {} : { archivedSessionIds }),
+          ...(pinnedSessionIds === undefined ? {} : { pinnedSessionIds }),
           selectedSession: catalog.sessions.find(item => item.sessionId === state.selectedSession?.sessionId) ?? state.selectedSession,
           workspaceCatalog: { backend, loading: false },
         }))
@@ -145,7 +154,7 @@ export function createWorkspaceActions({ set, get, connection, getConnectionGene
         if (target?.backend === 'codex') {
           throw new Error(zhCN.runtime.codexWorkspaceReadOnly)
         }
-        if (target?.backend === 'cursor' || target?.backend === 'antigravity' || target?.backend === 'pi' || target?.backend === 'opencode' || target?.backend === 'claude') {
+        if (target?.backend === 'cursor' || target?.backend === 'antigravity' || target?.backend === 'pi' || target?.backend === 'opencode' || target?.backend === 'claude' || target?.backend === 'hermes') {
           const nextTitle = title.trim()
           if (nextTitle.length === 0) throw new Error(zhCN.workspaces.namePlaceholder)
           set(state => ({
@@ -180,7 +189,7 @@ export function createWorkspaceActions({ set, get, connection, getConnectionGene
         if (target?.backend === 'codex') {
           throw new Error(zhCN.runtime.codexWorkspaceReadOnly)
         }
-        if (target?.backend === 'cursor' || target?.backend === 'antigravity' || target?.backend === 'pi' || target?.backend === 'opencode' || target?.backend === 'claude') {
+        if (target?.backend === 'cursor' || target?.backend === 'antigravity' || target?.backend === 'pi' || target?.backend === 'opencode' || target?.backend === 'claude' || target?.backend === 'hermes') {
           const sessionIds = new Set(target.sessionIds)
           const selected = get().selectedSession
           if (selected !== undefined && sessionIds.has(selected.sessionId)) {
@@ -232,7 +241,7 @@ export function createWorkspaceActions({ set, get, connection, getConnectionGene
         if (target?.backend === 'codex' || before?.backend === 'codex') {
           throw new Error(zhCN.runtime.codexWorkspaceReadOnly)
         }
-        if (target?.backend === 'cursor' || target?.backend === 'antigravity' || target?.backend === 'pi' || target?.backend === 'opencode' || target?.backend === 'claude' || before?.backend === 'cursor' || before?.backend === 'antigravity' || before?.backend === 'pi' || before?.backend === 'opencode' || before?.backend === 'claude') {
+        if (target?.backend === 'cursor' || target?.backend === 'antigravity' || target?.backend === 'pi' || target?.backend === 'opencode' || target?.backend === 'claude' || target?.backend === 'hermes' || before?.backend === 'cursor' || before?.backend === 'antigravity' || before?.backend === 'pi' || before?.backend === 'opencode' || before?.backend === 'claude' || before?.backend === 'hermes') {
           set(state => {
             const items = state.workspaces.slice()
             const from = items.findIndex(item => item.workspaceId === workspaceId)
@@ -254,7 +263,7 @@ export function createWorkspaceActions({ set, get, connection, getConnectionGene
         set({
           workspaces: [
             ...workspaceIds.flatMap(id => byId.get(id) === undefined ? [] : [byId.get(id)!]),
-            ...get().workspaces.filter(item => item.backend === 'codex' || item.backend === 'cursor' || item.backend === 'antigravity' || item.backend === 'pi' || item.backend === 'opencode' || item.backend === 'claude'),
+            ...get().workspaces.filter(item => item.backend === 'codex' || item.backend === 'cursor' || item.backend === 'antigravity' || item.backend === 'pi' || item.backend === 'opencode' || item.backend === 'claude' || item.backend === 'hermes'),
           ],
           busyAction: undefined,
         })
@@ -354,7 +363,9 @@ export function createWorkspaceActions({ set, get, connection, getConnectionGene
                 ? 'create-antigravity-workspace'
                 : backend === 'opencode'
                   ? 'create-opencode-workspace'
-                  : 'create-workspace',
+                  : backend === 'claude'
+                    ? 'create-claude-workspace'
+                    : backend === 'hermes' ? 'create-hermes-workspace' : 'create-workspace',
         error: undefined,
       })
       const scope = beginMutation()
@@ -440,6 +451,23 @@ export function createWorkspaceActions({ set, get, connection, getConnectionGene
             return {
               workspaces: [...state.workspaces.filter(item => item.backend !== 'claude'), ...merged.workspaces],
               sessions: [...state.sessions.filter(item => item.backend !== 'claude'), ...merged.sessions],
+              busyAction: undefined,
+            }
+          })
+          return created
+        }
+        if (backend === 'hermes') {
+          if (!connection.hasHermes()) throw new Error(zhCN.runtime.hermesUnavailable)
+          const workspace = createHermesWorkspace(path)
+          const catalog = await loadHermesCatalog(scope.bind(() => connection.requireHermes()), [...get().workspaces, workspace], path)
+          if (!scope.current()) return undefined
+          let created = workspace
+          set(state => {
+            const merged = mergeHermesCatalog(catalog, state.workspaces, state.sessions)
+            created = merged.workspaces.find(item => item.workspaceId === workspace.workspaceId) ?? workspace
+            return {
+              workspaces: [...state.workspaces.filter(item => item.backend !== 'hermes'), ...merged.workspaces],
+              sessions: [...state.sessions.filter(item => item.backend !== 'hermes'), ...merged.sessions],
               busyAction: undefined,
             }
           })

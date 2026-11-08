@@ -1,4 +1,5 @@
 import { hostname } from 'node:os'
+import { existsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import type { ControlResult } from './control-result.js'
 import { resolveConfig, type Config, type ConfigInput, type ResolvedConfig } from './config.js'
@@ -13,8 +14,10 @@ import { ClientServerApi, HostServerApi } from './server-api.js'
 import { ServerCredentialStore } from './server-credentials.js'
 import { registerControlRoute, type HostWebServerLike } from './control-route.js'
 import { ControlStatusStream } from './control-stream.js'
+import type { PluginUpdateSnapshot } from './update-check.js'
 import { codexBinaryCandidates } from './codex/domain.js'
 import { cursorBinaryCandidates } from './acp/gateway.js'
+import { defaultCheckExecutable, installOrConfigureBackend, isBuiltinAcpBackend } from './acp/backend-installer.js'
 
 export interface PluginSettingsView {
   config: Config
@@ -24,6 +27,11 @@ export interface PluginSettingsView {
   association?: PluginAssociation
   associations: Partial<Record<'host' | 'client', PluginAssociation>>
   acpAvailability?: Record<string, boolean>
+  acpInstallResult?: {
+    backend: string
+    action: 'configured' | 'installed' | 'download_required'
+    downloadUrl?: string
+  }
 }
 
 export interface PluginAssociation {
@@ -62,6 +70,8 @@ export class PluginControlRuntime {
       client: ClientModeRuntime | undefined
       host: HostAuthorizationControl
     }>,
+    /** Update-check snapshots merged into every `status` result; absent when the plugin is disabled. */
+    private readonly updates?: { snapshot(): PluginUpdateSnapshot | undefined },
   ) {}
 
   register(connection: HostConnectionHandle, webServer?: HostWebServerLike): () => Promise<void> {
@@ -90,6 +100,7 @@ export class PluginControlRuntime {
       // A request arriving during replacement must use the new Server runtime.
       if (endpoint !== 'settings.server.set') await this.serverSwitchFlight
       if (endpoint === 'settings.development.set') return ok(await this.setDevelopment(payload))
+      if (endpoint === 'settings.appearance.set') return ok(await this.setAppearance(payload))
       if (endpoint === 'settings.get') return ok(await this.settingsView())
       if (endpoint === 'settings.configure') return ok(await this.configure(payload))
       if (endpoint === 'settings.server.set') return ok(await this.setServer(payload))
@@ -99,6 +110,7 @@ export class PluginControlRuntime {
       if (endpoint === 'settings.acp.set') return ok(await this.setAcp(payload))
       if (endpoint === 'settings.acp.add') return ok(await this.addAcp(payload))
       if (endpoint === 'settings.acp.remove') return ok(await this.removeAcp(payload))
+      if (endpoint === 'settings.acp.installOrConfigure') return ok(await this.installOrConfigureAcp(payload))
       if (endpoint === 'settings.logout') return ok(await this.logout())
       if (endpoint === 'host.authorization.set' && this.client !== undefined) {
         const value = record(payload)
@@ -132,11 +144,18 @@ export class PluginControlRuntime {
       if (endpoint === 'host.reconnect') {
         if (this.host === undefined) throw new ClientModeError('METHOD_NOT_ALLOWED', 'This plugin is not running as a Host.')
         this.host.reconnectHost()
-        return ok(this.hostOnlyStatus())
+        return withUpdate(ok(this.hostOnlyStatus()), this.updates?.snapshot())
+      }
+      if (endpoint === 'status') {
+        // Both mode paths merge the update snapshot here, so the SSE stream,
+        // polling, and the unary call always observe the same payload shape.
+        const base = this.client !== undefined
+          ? await this.client.handleControl(endpoint, payload, signal)
+          : ok(this.hostOnlyStatus())
+        return withUpdate(base, this.updates?.snapshot())
       }
       if (this.client !== undefined) return this.client.handleControl(endpoint, payload, signal)
 
-      if (endpoint === 'status') return ok(this.hostOnlyStatus())
       if (endpoint === 'devices') return ok([])
       if (endpoint === 'host.account.login') {
         if (this.host === undefined) throw new ClientModeError('METHOD_NOT_ALLOWED', 'This plugin is not running as a Host.')
@@ -154,7 +173,9 @@ export class PluginControlRuntime {
         }
         return ok(await this.host.authorizeHostWithCode(value.code))
       }
-      if (endpoint === 'mode.set' && record(payload).mode === 'local') return ok(this.hostOnlyStatus())
+      if (endpoint === 'mode.set' && record(payload).mode === 'local') {
+        return withUpdate(ok(this.hostOnlyStatus()), this.updates?.snapshot())
+      }
       throw new ClientModeError('METHOD_NOT_ALLOWED', 'Remote Client mode is disabled by the plugin role.')
     } catch (error) {
       return fail(error)
@@ -264,17 +285,30 @@ export class PluginControlRuntime {
   private async setDevelopment(payload: unknown): Promise<PluginSettingsView> {
     if (this.settings === undefined) throw new ClientModeError('SETTINGS_UNAVAILABLE', 'DSH user settings are unavailable in this profile.')
     const value = record(payload)
+    if (value.debugLogging !== undefined && typeof value.debugLogging !== 'boolean') throw new ClientModeError('INVALID_MESSAGE', 'The debug logging switch must be a boolean.')
+    if (value.remoteToolsEnabled !== undefined && typeof value.remoteToolsEnabled !== 'boolean') throw new ClientModeError('INVALID_MESSAGE', 'The Remote Tools switch must be a boolean.')
     if (value.terminalEnabled !== undefined && typeof value.terminalEnabled !== 'boolean') throw new ClientModeError('INVALID_MESSAGE', 'The terminal switch must be a boolean.')
     if (value.ports !== undefined && (!Array.isArray(value.ports) || value.ports.some((port) => !Number.isInteger(port)))) throw new ClientModeError('INVALID_MESSAGE', 'Loopback ports must be integers.')
-    if (value.terminalEnabled === undefined && value.ports === undefined) throw new ClientModeError('INVALID_MESSAGE', 'A terminal switch or loopback ports are required.')
+    if (value.terminalEnabled === undefined && value.remoteToolsEnabled === undefined && value.ports === undefined && value.debugLogging === undefined) throw new ClientModeError('INVALID_MESSAGE', 'A development setting is required.')
     const current = editableConfig(resolveConfig(this.settings.get()))
     const next = resolveConfig({ ...current,
+      logLevel: value.debugLogging === undefined ? current.logLevel : value.debugLogging ? 'debug' : 'info',
       terminal: { enabled: value.terminalEnabled === undefined ? (current.terminal?.enabled ?? true) : value.terminalEnabled },
+      remoteTools: { enabled: value.remoteToolsEnabled === undefined ? (current.remoteTools?.enabled ?? true) : value.remoteToolsEnabled },
       loopback: { ports: value.ports === undefined ? (current.loopback?.ports ?? []) : value.ports },
     })
     await this.settings.replace(editableConfig(next))
     if (value.terminalEnabled !== undefined) this.host?.setTerminalEnabled?.(value.terminalEnabled)
     if (value.ports !== undefined) this.host?.setLoopbackPorts?.(value.ports)
+    return this.settingsView()
+  }
+
+  private async setAppearance(payload: unknown): Promise<PluginSettingsView> {
+    if (this.settings === undefined) throw new ClientModeError('SETTINGS_UNAVAILABLE', 'DSH user settings are unavailable in this profile.')
+    const entry = record(payload).sidebarEntry
+    if (entry !== 'standard' && entry !== 'compact') throw new ClientModeError('INVALID_MESSAGE', 'The sidebar entry style must be Standard or Compact.')
+    const current = editableConfig(resolveConfig(this.settings.get()))
+    await this.settings.replace(editableConfig(resolveConfig({ ...current, sidebar: { entry } })))
     return this.settingsView()
   }
 
@@ -349,12 +383,71 @@ export class PluginControlRuntime {
   private async removeAcp(payload: unknown): Promise<PluginSettingsView> {
     if (this.settings === undefined) throw new ClientModeError('SETTINGS_UNAVAILABLE', 'DSH user settings are unavailable in this profile.')
     const id = record(payload).id
-    if (typeof id !== 'string' || ['codex', 'cursor', 'antigravity', 'pi', 'claude', 'opencode'].includes(id)) throw new ClientModeError('INVALID_MESSAGE', 'Only custom ACP backends can be removed.')
+    if (typeof id !== 'string' || ['codex', 'cursor', 'antigravity', 'pi', 'claude', 'opencode', 'hermes'].includes(id)) throw new ClientModeError('INVALID_MESSAGE', 'Only custom ACP backends can be removed.')
     const current = resolveConfig(this.settings.get())
     const backends = (current.acp?.backends ?? []).filter(item => item.id !== id)
     await this.settings.replace(editableConfig({ ...current, acp: { enabled: current.acp?.enabled ?? true, backends } }))
     await this.host?.setAgentBackends?.(resolveConfig(this.settings.get()))
     return { ...await this.settingsView(), applies: 'live' }
+  }
+
+  private async installOrConfigureAcp(payload: unknown): Promise<PluginSettingsView> {
+    if (this.settings === undefined) throw new ClientModeError('SETTINGS_UNAVAILABLE', 'DSH user settings are unavailable in this profile.')
+    const value = record(payload)
+    const backend = value.backend
+    if (typeof backend !== 'string' || !isBuiltinAcpBackend(backend)) {
+      throw new ClientModeError('INVALID_MESSAGE', 'A valid built-in ACP backend is required.')
+    }
+    const outcome = await installOrConfigureBackend(backend)
+    if (outcome.action === 'download_required') {
+      const view = await this.settingsView()
+      return {
+        ...view,
+        acpInstallResult: {
+          backend,
+          action: 'download_required',
+          downloadUrl: outcome.downloadUrl,
+        },
+      }
+    }
+    const detected = outcome.detectedCommand
+    if (!detected) {
+      throw new ClientModeError('ACP_UNAVAILABLE', `Backend ${backend} could not be configured.`)
+    }
+    const defaultArgsMap: Record<string, string[]> = {
+      codex: ['app-server'],
+      cursor: ['acp'],
+      antigravity: ['--input-format', 'stream-json', '--output-format', 'stream-json'],
+      hermes: ['acp'],
+      opencode: ['acp'],
+      pi: [],
+      claude: [],
+    }
+    const defaultArgs = defaultArgsMap[backend] ?? ['acp']
+
+    const current = resolveConfig(this.settings.get())
+    const existing = current.acp?.backends.some(item => item.id === backend)
+    const backends = existing
+      ? (current.acp?.backends ?? []).map(item => item.id === backend ? { ...item, command: detected, enabled: true } : item)
+      : [...(current.acp?.backends ?? []), { id: backend, command: detected, enabled: true, args: defaultArgs }]
+
+    await this.settings.replace({
+      ...editableConfig(current),
+      ...(backend === 'cursor' ? { cursor: { ...current.cursor, binary: detected, enabled: true } } : {}),
+      ...(backend === 'codex' ? { codex: { ...current.codex, binary: detected, enabled: true } } : {}),
+      acp: { enabled: true, backends },
+    })
+    await this.host?.setAgentBackends?.(resolveConfig(this.settings.get()))
+    const view = await this.settingsView()
+    return {
+      ...view,
+      applies: 'live',
+      acpInstallResult: {
+        backend,
+        action: outcome.action,
+        downloadUrl: outcome.downloadUrl,
+      },
+    }
   }
   private async authorizeOwnedRole(
     serverUrl: string,
@@ -460,13 +553,24 @@ export class PluginControlRuntime {
 }
 
 function backendCommandAvailable(backend: string, command: string): boolean {
-  const candidates = backend === 'codex' ? codexBinaryCandidates(command)
-    : backend === 'cursor' || backend === 'antigravity' || backend === 'opencode' ? cursorBinaryCandidates(command) : [command]
-  return candidates.some(commandAvailable)
+  if (!command || typeof command !== 'string' || command.trim().length === 0) return false
+  const trimmed = command.trim()
+  if (defaultCheckExecutable(trimmed)) return true
+  const candidates = backend === 'codex' ? codexBinaryCandidates(trimmed)
+    : backend === 'cursor' || backend === 'antigravity' || backend === 'opencode' ? cursorBinaryCandidates(trimmed) : [trimmed]
+  return candidates.some(candidate => defaultCheckExecutable(candidate) || commandAvailable(candidate))
 }
 
 function commandAvailable(command: string): boolean {
-  try { execFileSync(process.platform === 'win32' ? 'where' : 'which', [command], { stdio: 'ignore' }); return true } catch { return false }
+  try {
+    execFileSync(process.platform === 'win32' ? 'where' : 'which', [command], {
+      stdio: 'ignore',
+      timeout: 5000,
+    })
+    return true
+  } catch {
+    return false
+  }
 }
 
 function editableConfig(config: ResolvedConfig): Config {
@@ -475,6 +579,8 @@ function editableConfig(config: ResolvedConfig): Config {
     role: config.role,
     ...(config.serverUrl === undefined ? {} : { serverUrl: config.serverUrl }),
     terminal: config.terminal,
+    remoteTools: config.remoteTools,
+    sidebar: config.sidebar,
     hostControl: config.hostControl ?? { enabled: true },
     loopback: config.loopback,
     forceRelay: config.forceRelay,
@@ -508,6 +614,12 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 function ok(value: unknown): ControlResult<unknown> { return { ok: true, value } }
+
+/** Attach the update-check snapshot to a successful status-shaped result. */
+function withUpdate(result: ControlResult<unknown>, update: PluginUpdateSnapshot | undefined): ControlResult<unknown> {
+  if (update === undefined || !result.ok || !isRecord(result.value)) return result
+  return ok({ ...result.value, update })
+}
 
 function fail(error: unknown): ControlResult<unknown> {
   const source = error instanceof Error ? error : undefined

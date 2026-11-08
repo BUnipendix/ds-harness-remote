@@ -4,8 +4,8 @@ import { ACP_TOOL_CALL_ENDPOINTS, ACP_TOOL_STREAM_ENDPOINTS } from '@dsh-remote/
 import type { RemoteTypertGatewayTarget, TypertGatewayRequest, TypertRpcResult } from '../typert-gateway-contract.js'
 import type { AcpImage } from './image-content.js'
 import { acpImageContent, acpImageLimits, parseAcpImage } from './image-content.js'
-import type { AcpModelSelection, AcpVirtualWorkspaceView } from './virtual-catalog.js'
-import { createAcpWorkspaceView, modelCatalog, nativeWorkspace, recreateWorkspaceFromId } from './virtual-catalog.js'
+import type { AcpCatalogBackend, AcpModelSelection, AcpVirtualWorkspaceView } from './virtual-catalog.js'
+import { acpBackendLabel, createAcpWorkspaceView, modelCatalog, nativeWorkspace, recreateWorkspaceFromId } from './virtual-catalog.js'
 import type {
   AcpClientLike,
   AcpPermissionPreset,
@@ -74,7 +74,7 @@ export class AcpVirtualHarness implements RemoteTypertGatewayTarget {
   constructor(
     private readonly client: AcpClientLike,
     private readonly host: { deviceId: string; name: string },
-    readonly backend: "cursor" | "antigravity" | "pi" | "opencode" | "claude" = "cursor",
+    readonly backend: AcpCatalogBackend = "cursor",
     /**
      * Host gateway used for endpoints this virtual Harness does not project
      * (settings, plugins, models, credentials, …). A real Harness workspace
@@ -132,7 +132,7 @@ export class AcpVirtualHarness implements RemoteTypertGatewayTarget {
   static remote(
     core: ConstructorParameters<typeof AgentAcpClient>[0],
     host: { deviceId: string; name: string },
-    backend: "cursor" | "antigravity" | "pi" | "opencode" | "claude" = "cursor",
+    backend: AcpCatalogBackend = "cursor",
     capabilities: readonly string[] = [],
     hostCarrier?: RemoteTypertGatewayTarget,
   ): AcpVirtualHarness {
@@ -145,7 +145,7 @@ export class AcpVirtualHarness implements RemoteTypertGatewayTarget {
   }
 
   private backendLabel(): string {
-    return this.backend === "claude" ? "Claude" : this.backend === "pi" ? "Pi" : this.backend === "opencode" ? "OpenCode" : this.backend === "antigravity" ? "Antigravity" : "Cursor"
+    return acpBackendLabel(this.backend)
   }
 
   async selectWorkspace(workspaceId: string): Promise<AcpVirtualWorkspaceView> {
@@ -216,7 +216,7 @@ export class AcpVirtualHarness implements RemoteTypertGatewayTarget {
     try {
       const args = carrierArgs(payload)
       if (ACP_TOOL_CALL_ENDPOINTS.some(item => item === endpoint)) {
-        if (this.backend === 'claude' || !this.client.workspaceToolCall) return business(failure('method-not-found', 'The Host does not support ACP workspace tools.'))
+        if (!this.client.workspaceToolCall) return business(failure('method-not-found', 'The Host does not support ACP workspace tools.'))
         const sessionId = requiredString(args.workspaceFileScopeId ?? args.agentId ?? args.sessionId, 'sessionId')
         return business(await this.client.workspaceToolCall(nativeAcpId(sessionId, this.backend), this.backend, endpoint as typeof ACP_TOOL_CALL_ENDPOINTS[number], args, signal))
       }
@@ -241,6 +241,7 @@ export class AcpVirtualHarness implements RemoteTypertGatewayTarget {
         case 'session/create': return business(await this.createSession(requestArg(args), signal))
         case 'session/fork': return business(failure('bad-request', `${this.backendLabel()} Remote does not support session fork yet.`))
         case 'session/history': return business(await this.sessionHistory(requestArg(args)))
+        case 'session/events':
         case 'session/page': return business(await this.sessionPage(requestArg(args)))
         case 'session/prompt': return business(await this.prompt(requestArg(args), signal))
         case 'session/cancel': return business(await this.cancel(requestArg(args), signal))
@@ -278,6 +279,7 @@ export class AcpVirtualHarness implements RemoteTypertGatewayTarget {
         case 'host/listDirectory':
         case 'directoryPicker/list': return business(await this.listDirectory(requestArg(args), signal))
         case 'skills/list': return business(success({ items: [] }))
+        case 'job/kill': return this.hostCarrier === undefined ? business(success({ outcome: 'already-finished' })) : await this.hostCarrier.dispatch(endpoint, payload, signal)
         case 'commands/list': return business(this.commandList(requestArg(args)))
         case 'commands/execute': return business(await this.executeCommand(requestArg(args)))
         default:
@@ -293,7 +295,6 @@ export class AcpVirtualHarness implements RemoteTypertGatewayTarget {
   async open(endpoint: string, payload: unknown, signal: AbortSignal): Promise<AsyncIterable<unknown>> {
     const args = carrierArgs(payload)
     if (ACP_TOOL_STREAM_ENDPOINTS.some(item => item === endpoint)) {
-      if (this.backend === 'claude') throw new Error('Claude workspace tools are not available.')
       const sessionId = requiredString(args.workspaceFileScopeId ?? args.agentId ?? args.sessionId, 'sessionId')
       const queue = new AsyncValueQueue(signal)
       const stream = await this.client.openStream(nativeAcpId(sessionId, this.backend), frame => {
@@ -458,7 +459,7 @@ export class AcpVirtualHarness implements RemoteTypertGatewayTarget {
     let images: AcpImage[]
     try {
       images = array(request.content).filter(part => record(part).type === 'image').map(parseAcpImage)
-      if (images.length > 4 || (images.length > 0 && this.backend !== 'antigravity') || array(request.content).some(part => !['text', 'image'].includes(String(record(part).type)))) throw new Error('Unsupported ACP content.')
+      if (images.length > 4 || (images.length > 0 && this.backend !== 'antigravity' && this.backend !== 'hermes') || array(request.content).some(part => !['text', 'image'].includes(String(record(part).type)))) throw new Error('Unsupported ACP content.')
     } catch { return failure('attachment-error', 'Invalid or unsupported image attachment.') }
     if (text === undefined && images.length === 0) return failure('attachment-error', 'A prompt or image is required.')
     const imageBlocks = images.map(image => acpImageContent(image, `agy-image:${crypto.randomUUID()}.${image.mimeType === 'image/jpeg' ? 'jpg' : image.mimeType.slice(6)}`))
@@ -530,12 +531,14 @@ export class AcpVirtualHarness implements RemoteTypertGatewayTarget {
 
   private async attachment(request: JsonRecord): Promise<unknown> {
     const sessionId = extractSessionId(request)
+    // 0.2.2 sends the full ImageAttachmentRef; older clients send only its id.
     const attachmentId = string(request.attachmentId)
+      ?? string(record(request.attachment).attachmentId)
     const session = this.ensureSessionRegistered(sessionId)
-    if (this.backend !== 'antigravity' || session === undefined || !attachmentId?.startsWith('agy-image:')) return failure('attachment-error', 'The image is not referenced by this AGY Session.')
+    if ((this.backend !== 'antigravity' && this.backend !== 'hermes') || session === undefined || !attachmentId?.startsWith('agy-image:')) return failure('attachment-error', 'The image is not referenced by this Session.')
     await this.hydrateSession(session)
     const cached = this.imageAttachments.get(attachmentId)
-    return cached?.sessionId === sessionId ? success({ attachment: cached.attachment, data: cached.data }) : failure('attachment-error', 'The AGY image is unavailable or expired.')
+    return cached?.sessionId === sessionId ? success({ attachment: cached.attachment, data: cached.data }) : failure('attachment-error', 'The image attachment is unavailable or expired.')
   }
 
   private async hydrateSession(session: AcpSessionState): Promise<void> {
@@ -556,7 +559,7 @@ export class AcpVirtualHarness implements RemoteTypertGatewayTarget {
       } catch (error) {
         // A failed history read is not a successful empty baseline; do not continue
         // a restored conversation until its authoritative history is available.
-        if (this.backend === 'pi' || this.backend === 'claude' || this.backend === 'opencode') throw error
+        if (this.backend === 'pi' || this.backend === 'claude' || this.backend === 'opencode' || this.backend === 'hermes') throw error
         // Preserve legacy AGY history availability behavior.
       }
     }
@@ -584,7 +587,7 @@ export class AcpVirtualHarness implements RemoteTypertGatewayTarget {
       projections: {
         asOfSeq: page.cursor,
         values: {
-          title: session.title ?? (this.backend === "claude" ? "Claude" : this.backend === "pi" ? "Pi" : this.backend === "opencode" ? "OpenCode" : this.backend === "antigravity" ? "Antigravity" : "Cursor"),
+          title: session.title ?? acpBackendLabel(this.backend),
           sessionListMetadata: { blank: session.blank && session.events.length === 0, lastPromptAt: null },
           modelSelection: this.modelSelectionProjection(sessionId),
           permissions: this.permissionsProjection(sessionId),
@@ -612,7 +615,7 @@ export class AcpVirtualHarness implements RemoteTypertGatewayTarget {
       throughSeq: optionalInteger(request.throughSeq),
       limit: optionalPositiveInteger(request.limit) ?? optionalPositiveInteger(request.maxMessages) ?? 50,
     })
-    return success({ records: page.records, hasMore: page.hasMore })
+    return success({ records: page.records, hasMore: page.hasMore, cursor: page.cursor })
   }
 
   private historyPage(
@@ -701,7 +704,7 @@ export class AcpVirtualHarness implements RemoteTypertGatewayTarget {
         try {
           discovered = await this.client.listSessions(workspace.path, this.backend, 30)
         } catch (error) {
-          if (this.backend === 'pi' || this.backend === 'claude') throw error
+          if (this.backend === 'pi' || this.backend === 'claude' || this.backend === 'hermes') throw error
           // Preserve legacy AGY catalog availability behavior.
         }
       }
@@ -726,7 +729,7 @@ export class AcpVirtualHarness implements RemoteTypertGatewayTarget {
       this.sortWorkspaceSessions(workspace)
       workspace.updatedAt = new Date().toISOString()
     } catch (error) {
-      if (this.backend === 'pi' || this.backend === 'claude') throw error
+      if (this.backend === 'pi' || this.backend === 'claude' || this.backend === 'hermes') throw error
       // Preserve legacy AGY catalog availability behavior.
     }
   }
@@ -798,7 +801,7 @@ export class AcpVirtualHarness implements RemoteTypertGatewayTarget {
         kind: 'sequenced',
         asOfSeq,
         values: {
-          title: session.title ?? (this.backend === "claude" ? "Claude" : this.backend === "pi" ? "Pi" : this.backend === "opencode" ? "OpenCode" : this.backend === "antigravity" ? "Antigravity" : "Cursor"),
+          title: session.title ?? acpBackendLabel(this.backend),
           sessionListMetadata: { blank: session.blank, lastPromptAt: null },
           modelSelection: this.modelSelectionProjection(session.sessionId),
           permissions: this.permissionsProjection(session.sessionId),

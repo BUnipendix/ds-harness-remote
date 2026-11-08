@@ -5,6 +5,8 @@ export type PreviewKind = 'text' | 'image' | 'pdf' | 'office' | 'unsupported'
 
 export const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 export const MAX_PREVIEW_BYTES = 8 * 1024 * 1024
+/** PDF rendering keeps the document and decoded page data in the WebView. */
+export const MAX_PDF_PREVIEW_BYTES = 16 * 1024 * 1024
 export const PREVIEW_CHUNK_BYTES = 512 * 1024
 export const MAX_OFFICE_SOURCE_BYTES = 50 * 1024 * 1024
 export const MAX_MISSING_FONTS = 32
@@ -71,7 +73,8 @@ export async function loadWorkspacePreview(
 ): Promise<WorkspacePreview> {
   if (kind === 'office') return loadOfficePreview(tools, sessionId, path, signal)
   assertActive(signal)
-  const bytes = await readBoundedBytes(tools, sessionId, path, MAX_PREVIEW_BYTES, signal)
+  const bytes = await readBoundedBytes(tools, sessionId, path,
+    kind === 'pdf' ? MAX_PDF_PREVIEW_BYTES : MAX_PREVIEW_BYTES, signal)
   return kind === 'image'
     ? { data: encodeBase64(bytes), mimeType: imagePreviewType(path, bytes), missingFonts: [] }
     : { data: encodeBase64(bytes), mimeType: pdfPreviewType(path, bytes), missingFonts: [] }
@@ -199,17 +202,17 @@ function parseOfficeRender(value: unknown, source: WorkspaceFileStat, generation
   if (value.generation !== generation) throw changed('The Office conversion engine changed during the preview.')
   if (value.offset !== 0 || value.eof !== true) throw invalid('The Host returned an incomplete Office preview.')
   const declared = bytesOf(value.bytes)
-  if (declared !== undefined && declared > MAX_PREVIEW_BYTES) {
-    throw sizeLimit('The converted preview exceeds the preview size limit.', { bytes: declared, maxBytes: MAX_PREVIEW_BYTES })
+  if (declared !== undefined && declared > MAX_PDF_PREVIEW_BYTES) {
+    throw sizeLimit('The converted preview exceeds the preview size limit.', { bytes: declared, maxBytes: MAX_PDF_PREVIEW_BYTES })
   }
-  if ((typeof value.data === 'string' && value.data.length > base64Length(MAX_PREVIEW_BYTES))
-    || (value.data instanceof Uint8Array && value.data.byteLength > MAX_PREVIEW_BYTES)) {
-    throw sizeLimit('The converted preview exceeds the preview size limit.', { maxBytes: MAX_PREVIEW_BYTES })
+  if ((typeof value.data === 'string' && value.data.length > base64Length(MAX_PDF_PREVIEW_BYTES))
+    || (value.data instanceof Uint8Array && value.data.byteLength > MAX_PDF_PREVIEW_BYTES)) {
+    throw sizeLimit('The converted preview exceeds the preview size limit.', { maxBytes: MAX_PDF_PREVIEW_BYTES })
   }
-  const data = previewBytes(value.data, MAX_PREVIEW_BYTES)
+  const data = previewBytes(value.data, MAX_PDF_PREVIEW_BYTES)
   if (data.byteLength === 0) throw invalid('The Host returned an empty Office preview.')
-  if (data.byteLength > MAX_PREVIEW_BYTES) {
-    throw sizeLimit('The converted preview exceeds the preview size limit.', { bytes: data.byteLength, maxBytes: MAX_PREVIEW_BYTES })
+  if (data.byteLength > MAX_PDF_PREVIEW_BYTES) {
+    throw sizeLimit('The converted preview exceeds the preview size limit.', { bytes: data.byteLength, maxBytes: MAX_PDF_PREVIEW_BYTES })
   }
   if (declared !== undefined && declared !== data.byteLength) {
     throw invalid('The Host declared a different converted preview size.')
