@@ -1,4 +1,5 @@
 import {
+  HARNESS_REMOTE_COMPRESS_CAPABILITY,
   createRpcError,
   createRpcResponse,
   parseRemoteWorkspaceTypes,
@@ -23,9 +24,11 @@ export { RpcError } from './safe-error.js'
 const wireRequestSchema = z.object({ method: z.string().min(1), params: z.unknown() }).strict()
 const emptyParamsSchema = z.object({}).strict()
 const historyConfigureSchema = z.object({ compact: z.boolean() }).strict()
+const compressionConfigureSchema = z.object({ enabled: z.boolean() }).strict()
 const apiMethods = new Set([
   'harness.transport.describe',
   'remote.history.configure',
+  'remote.compression.configure',
   'harness.remote.call',
   'harness.remote.transfer.open',
   'harness.remote.transfer.chunk',
@@ -87,6 +90,7 @@ export class RpcRouter {
     private readonly workspaceTypes?: () => readonly RemoteWorkspaceTypeDescription[],
     private readonly pluginRoute?: PluginRouteBridge,
     private readonly workspaceUpload?: WorkspaceUploadHost,
+    private readonly setCompression?: (enabled: boolean) => void,
   ) {}
 
   async closePeerStreams(): Promise<void> {
@@ -150,6 +154,9 @@ export class RpcRouter {
         emptyParamsSchema.parse(params)
         const capabilities = [...new Set([...this.capabilities(), 'remote.history.compact.v1',
           ...(this.harnessRemote === undefined ? [] : ['harness.remote.stream.transfer.v1']),
+          // Advertised only when this connection's channel can actually flip
+          // its codec; an unwired Host stays silent and old clients stay legacy.
+          ...(this.setCompression === undefined ? [] : [HARNESS_REMOTE_COMPRESS_CAPABILITY]),
         ])]
         let workspaceTypes: RemoteWorkspaceTypeDescription[] | undefined
         if (this.workspaceTypes !== undefined) {
@@ -170,6 +177,16 @@ export class RpcRouter {
           if (bridge !== undefined) bridge.compactHistoryEnabled = compact
         }
         return { compact }
+      }
+      case 'remote.compression.configure': {
+        const { enabled } = compressionConfigureSchema.parse(params)
+        if (enabled) {
+          if (this.setCompression === undefined) {
+            throw new RpcError('FEATURE_NOT_SUPPORTED', 'This connection does not support secure-message compression.')
+          }
+          this.setCompression(true)
+        }
+        return { enabled }
       }
       case 'harness.remote.call': return this.requireRemoteGateway().call(params)
       case 'harness.remote.transfer.open': return this.requireRemoteGateway().openTransfer(params)

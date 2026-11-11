@@ -57,6 +57,7 @@ import type { SafeLogger } from './logging.js'
 import type { AuthorizedPeerDevice, HostServerApi } from './server-api.js'
 import { ServerApiError } from './server-api.js'
 import type { AuthenticatedPeerChannel } from './types.js'
+import { nodeMessageCompressor } from './message-compression.js'
 import { PLUGIN_VERSION } from './version.js'
 
 interface WebSocketLike {
@@ -1387,8 +1388,8 @@ class ServerNoiseChannel implements AuthenticatedPeerChannel {
   readonly peerIdentityKey: string
   readonly mode: 'LAN' | 'P2P' | 'TURN' | 'Relay'
   private readonly handlers = new Set<(message: RemoteMessage) => void>()
-  private readonly incoming = new SecureMessageCodec()
-  private readonly outgoing = new SecureMessageCodec()
+  private readonly incoming = new SecureMessageCodec(nodeMessageCompressor())
+  private readonly outgoing = new SecureMessageCodec(nodeMessageCompressor())
   private closed = false
   /** Noise + SecureMessageCodec counters are not re-entrant; serialize sends. */
   private sendTail: Promise<void> = Promise.resolve()
@@ -1407,6 +1408,14 @@ class ServerNoiseChannel implements AuthenticatedPeerChannel {
     }
     this.peerDeviceId = tunnel.peer.deviceId
     this.peerIdentityKey = tunnel.peer.publicKey
+  }
+
+  /** Per-connection switch flipped by `remote.compression.configure`; both
+   * directions move together. Frames stay self-describing, so messages already
+   * in flight decode either way during the switch. */
+  enableCompression(): void {
+    this.incoming.enableCompression()
+    this.outgoing.enableCompression()
   }
 
   async send(message: RemoteMessage): Promise<void> {

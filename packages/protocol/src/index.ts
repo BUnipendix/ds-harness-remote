@@ -117,6 +117,78 @@ const SECURE_FRAGMENT_VERSION = 1
 const SECURE_FRAGMENT_HEADER_BYTES = 17
 const MAX_IN_FLIGHT_SECURE_MESSAGES = 8
 
+/**
+ * Secure-message compression (docs/protocol.md "Secure-message compression"):
+ * negotiated per connection via the `harness.remote.compress.v1` capability
+ * and the `remote.compression.configure` RPC. DSHZ frames reuse the DSHF
+ * layout plus one trailing flags byte; the payload is raw-deflate seeded with
+ * the rolling last 32 KiB of this direction's plaintext as the zlib preset
+ * dictionary. The dictionary is never transmitted — each end rebuilds it from
+ * plaintext it already holds inside the encrypted channel, so no real
+ * communication is ever embedded in a shipped artifact.
+ */
+const SECURE_COMPRESSED_MAGIC = new Uint8Array([0x44, 0x53, 0x48, 0x5a]) // DSHZ
+const SECURE_COMPRESSED_VERSION = 1
+/** DSHF layout (17 bytes) plus one trailing flags byte. */
+const SECURE_COMPRESSED_HEADER_BYTES = 18
+const SECURE_COMPRESSION_FLAG_DEFLATED = 0x01
+const SECURE_COMPRESSION_KNOWN_FLAGS = SECURE_COMPRESSION_FLAG_DEFLATED
+/** Messages below this are framed as DSHZ but carried verbatim. */
+export const SECURE_COMPRESSION_MIN_MESSAGE_BYTES = 512
+/** zlib preset-dictionary ceiling; the rolling window never holds more. */
+export const SECURE_COMPRESSION_DICTIONARY_BYTES = 32 * 1024
+/**
+ * Capability string pinning the entire scheme: raw deflate, the rolling
+ * 32 KiB plaintext dictionary, and the 512 B threshold. A future dictionary
+ * or framing change must ship under a new capability string.
+ */
+export const HARNESS_REMOTE_COMPRESS_CAPABILITY = 'harness.remote.compress.v1' as const
+
+/**
+ * Compression primitives, injected so this package stays platform-neutral
+ * (node:zlib on the Host; RN/browser runtimes simply omit compression).
+ * Implementations must use zlib-format deflate with the receiver-side preset
+ * dictionary deciding the shared context; raw-mode dictionary support is not
+ * portable across runtimes.
+ */
+export interface MessageCompressor {
+  deflate(data: Uint8Array, dictionary: Uint8Array): Uint8Array
+  inflate(data: Uint8Array, dictionary: Uint8Array): Uint8Array
+}
+
+/**
+ * The last 32 KiB of one direction's plaintext: the live compression
+ * dictionary. Both ends append every message they encode or decode, in wire
+ * order, so the windows mirror each other; a decompression failure means the
+ * mirror is broken and the channel must close (fail closed).
+ */
+export class RollingPlaintextWindow {
+  private buffer: Uint8Array = new Uint8Array(0)
+
+  append(data: Uint8Array): void {
+    if (data.byteLength === 0) return
+    if (data.byteLength >= SECURE_COMPRESSION_DICTIONARY_BYTES) {
+      this.buffer = Uint8Array.from(data.subarray(data.byteLength - SECURE_COMPRESSION_DICTIONARY_BYTES))
+      return
+    }
+    const overflow = this.buffer.byteLength + data.byteLength - SECURE_COMPRESSION_DICTIONARY_BYTES
+    const kept = overflow > 0 ? this.buffer.subarray(overflow) : this.buffer
+    const merged = new Uint8Array(kept.byteLength + data.byteLength)
+    merged.set(kept, 0)
+    merged.set(data, kept.byteLength)
+    this.buffer = merged
+  }
+
+  /** Copy of the current window (≤ 32 KiB); empty until plaintext has flowed. */
+  snapshot(): Uint8Array {
+    return Uint8Array.from(this.buffer)
+  }
+
+  reset(): void {
+    this.buffer = new Uint8Array(0)
+  }
+}
+
 export const messageTypes = [
   'rpc.request',
   'rpc.response',
@@ -152,6 +224,7 @@ export const rpcMethods = [
   'workspace.upload.abort',
   'harness.transport.describe',
   'remote.history.configure',
+  'remote.compression.configure',
   'harness.api.call',
   'harness.api.transfer.open',
   'harness.api.transfer.chunk',
@@ -499,6 +572,7 @@ export const harnessCapabilityValues = [
   'harness.remote.v3',
   'harness.remote.transfer.v1',
   'harness.remote.stream.transfer.v1',
+  'harness.remote.compress.v1',
   'fileviewer.read.v1',
   'codex.appserver.v1',
   'codex.appserver.transfer.v1',
@@ -1353,6 +1427,8 @@ export function decodeMessage(data: Uint8Array | string): RemoteMessage {
 }
 
 interface FragmentAssembly {
+  kind: 'dshf' | 'dshz'
+  flags: number
   total: number
   totalBytes: number
   receivedBytes: number
@@ -1363,17 +1439,76 @@ interface FragmentAssembly {
  * Splits application plaintext before Noise encryption and reassembles it
  * after decryption. Noise transport messages have a 65,535-byte ceiling, so
  * large native ApiProxy responses cannot be encrypted as one message.
+ *
+ * When built with a [MessageCompressor] and enabled per connection
+ * (`enableCompression`), messages travel as DSHZ frames: raw-deflated (with
+ * the rolling plaintext dictionary) and fragmented when large. Frames are
+ * self-describing by magic, so legacy DSHF/raw and DSHZ frames may interleave
+ * freely — the receiver never depends on the sender's mode switch timing.
+ * One codec instance serves one direction: its rolling window must mirror
+ * exactly the peer's same-direction window.
  */
 export class SecureMessageCodec {
   private nextMessageId = 1
   private readonly assemblies = new Map<number, FragmentAssembly>()
+  private readonly plaintextWindow = new RollingPlaintextWindow()
+  private compressionEnabled = false
+
+  constructor(private readonly compression?: MessageCompressor) {}
+
+  /**
+   * Turns on DSHZ encoding for subsequent messages. Inert without a
+   * constructor compressor; the peer enables its own side when it answers the
+   * configure RPC, so the two sides may switch at different moments.
+   */
+  enableCompression(): void {
+    if (this.compression === undefined) {
+      throw new Error('This codec was built without a compressor; compression cannot be enabled.')
+    }
+    this.compressionEnabled = true
+  }
+
+  get compressing(): boolean {
+    return this.compressionEnabled
+  }
 
   encode(message: Uint8Array): Uint8Array[] {
     if (message.byteLength > MAX_SECURE_MESSAGE_BYTES) {
       throw new Error('Secure message exceeds the reassembly limit.')
     }
-    if (message.byteLength <= SECURE_FRAGMENT_CHUNK_BYTES) return [message]
+    const frames = this.compressionEnabled && this.compression !== undefined
+      ? this.encodeCompressed(message)
+      : this.encodeLegacy(message)
+    // The dictionary for the NEXT message includes this one; append only on
+    // success so a failed encode cannot desync the mirror.
+    this.plaintextWindow.append(message)
+    return frames
+  }
 
+  private encodeLegacy(message: Uint8Array): Uint8Array[] {
+    if (message.byteLength <= SECURE_FRAGMENT_CHUNK_BYTES) return [message]
+    return this.encodeFragmented(SECURE_FRAGMENT_MAGIC, SECURE_FRAGMENT_HEADER_BYTES, 0, message)
+  }
+
+  private encodeCompressed(message: Uint8Array): Uint8Array[] {
+    let payload = message
+    let flags = 0
+    if (message.byteLength >= SECURE_COMPRESSION_MIN_MESSAGE_BYTES) {
+      const packed = this.compression!.deflate(message, this.plaintextWindow.snapshot())
+      if (packed.byteLength < message.byteLength) {
+        payload = packed
+        flags = SECURE_COMPRESSION_FLAG_DEFLATED
+      }
+    }
+    return this.encodeFragmented(SECURE_COMPRESSED_MAGIC, SECURE_COMPRESSED_HEADER_BYTES, flags, payload)
+  }
+
+  private encodeFragmented(
+    magic: Uint8Array,
+    headerBytes: number,
+    flags: number,
+    message: Uint8Array,
+  ): Uint8Array[] {
     const messageId = this.nextMessageId
     this.nextMessageId = messageId === 0xffff_ffff ? 1 : messageId + 1
     const total = Math.ceil(message.byteLength / SECURE_FRAGMENT_CHUNK_BYTES)
@@ -1381,22 +1516,33 @@ export class SecureMessageCodec {
     for (let index = 0; index < total; index += 1) {
       const start = index * SECURE_FRAGMENT_CHUNK_BYTES
       const chunk = message.subarray(start, Math.min(message.byteLength, start + SECURE_FRAGMENT_CHUNK_BYTES))
-      const frame = new Uint8Array(SECURE_FRAGMENT_HEADER_BYTES + chunk.byteLength)
-      frame.set(SECURE_FRAGMENT_MAGIC)
+      const frame = new Uint8Array(headerBytes + chunk.byteLength)
+      frame.set(magic)
       frame[4] = SECURE_FRAGMENT_VERSION
       const view = new DataView(frame.buffer)
       view.setUint32(5, messageId)
       view.setUint16(9, index)
       view.setUint16(11, total)
       view.setUint32(13, message.byteLength)
-      frame.set(chunk, SECURE_FRAGMENT_HEADER_BYTES)
+      if (headerBytes > SECURE_FRAGMENT_HEADER_BYTES) frame[SECURE_FRAGMENT_HEADER_BYTES] = flags
+      frame.set(chunk, headerBytes)
       frames.push(frame)
     }
     return frames
   }
 
   decode(frame: Uint8Array): Uint8Array | undefined {
-    if (!isSecureFragment(frame)) return frame
+    if (isSecureCompressedFrame(frame)) {
+      const message = this.decodeCompressedFrame(frame)
+      if (message !== undefined) this.plaintextWindow.append(message)
+      return message
+    }
+    if (!isSecureFragment(frame)) {
+      // Small unframed legacy message. It still feeds the window: once
+      // compression is on, the peer's later messages compress against it.
+      this.plaintextWindow.append(frame)
+      return frame
+    }
     if (frame.byteLength < SECURE_FRAGMENT_HEADER_BYTES || frame[4] !== SECURE_FRAGMENT_VERSION) {
       throw new Error('Secure fragment header is invalid.')
     }
@@ -1422,10 +1568,11 @@ export class SecureMessageCodec {
       if (index !== 0 || this.assemblies.size >= MAX_IN_FLIGHT_SECURE_MESSAGES) {
         throw new Error('Secure fragment sequence is invalid.')
       }
-      assembly = { total, totalBytes, receivedBytes: 0, chunks: [] }
+      assembly = { kind: 'dshf', flags: 0, total, totalBytes, receivedBytes: 0, chunks: [] }
       this.assemblies.set(messageId, assembly)
     }
-    if (assembly.total !== total || assembly.totalBytes !== totalBytes || index !== assembly.chunks.length) {
+    if (assembly.kind !== 'dshf' || assembly.total !== total || assembly.totalBytes !== totalBytes
+      || index !== assembly.chunks.length) {
       this.assemblies.delete(messageId)
       throw new Error('Secure fragment sequence is invalid.')
     }
@@ -1440,12 +1587,75 @@ export class SecureMessageCodec {
       message.set(part, offset)
       offset += part.byteLength
     }
+    this.plaintextWindow.append(message)
     return message
+  }
+
+  private decodeCompressedFrame(frame: Uint8Array): Uint8Array | undefined {
+    if (frame.byteLength < SECURE_COMPRESSED_HEADER_BYTES || frame[4] !== SECURE_COMPRESSED_VERSION) {
+      throw new Error('Secure compressed frame header is invalid.')
+    }
+    const flags = frame[SECURE_FRAGMENT_HEADER_BYTES]
+    if ((flags & ~SECURE_COMPRESSION_KNOWN_FLAGS) !== 0 || this.compression === undefined) {
+      throw new Error('Secure compressed frame is not acceptable on this codec.')
+    }
+    const view = new DataView(frame.buffer, frame.byteOffset, frame.byteLength)
+    const messageId = view.getUint32(5)
+    const index = view.getUint16(9)
+    const total = view.getUint16(11)
+    const totalBytes = view.getUint32(13)
+    if (messageId === 0 || total < 1 || index >= total || totalBytes < 1
+      || totalBytes > MAX_SECURE_MESSAGE_BYTES
+      || total !== Math.ceil(totalBytes / SECURE_FRAGMENT_CHUNK_BYTES)) {
+      throw new Error('Secure compressed frame metadata is invalid.')
+    }
+    const expectedChunkBytes = Math.min(
+      SECURE_FRAGMENT_CHUNK_BYTES,
+      totalBytes - index * SECURE_FRAGMENT_CHUNK_BYTES,
+    )
+    const chunk = frame.subarray(SECURE_COMPRESSED_HEADER_BYTES)
+    if (chunk.byteLength !== expectedChunkBytes) throw new Error('Secure compressed frame length is invalid.')
+
+    let assembly = this.assemblies.get(messageId)
+    if (assembly === undefined) {
+      if (index !== 0 || this.assemblies.size >= MAX_IN_FLIGHT_SECURE_MESSAGES) {
+        throw new Error('Secure compressed frame sequence is invalid.')
+      }
+      assembly = { kind: 'dshz', flags, total, totalBytes, receivedBytes: 0, chunks: [] }
+      this.assemblies.set(messageId, assembly)
+    }
+    if (assembly.kind !== 'dshz' || assembly.flags !== flags || assembly.total !== total
+      || assembly.totalBytes !== totalBytes || index !== assembly.chunks.length) {
+      this.assemblies.delete(messageId)
+      throw new Error('Secure compressed frame sequence is invalid.')
+    }
+    assembly.chunks.push(Uint8Array.from(chunk))
+    assembly.receivedBytes += chunk.byteLength
+    if (assembly.chunks.length < total) return undefined
+    this.assemblies.delete(messageId)
+    if (assembly.receivedBytes !== totalBytes) throw new Error('Secure message length is invalid.')
+    const packed = new Uint8Array(totalBytes)
+    let offset = 0
+    for (const part of assembly.chunks) {
+      packed.set(part, offset)
+      offset += part.byteLength
+    }
+    if ((flags & SECURE_COMPRESSION_FLAG_DEFLATED) === 0) return packed
+    // The dictionary is the plaintext BEFORE this message; the window has not
+    // seen it yet because appends happen only after a full decode.
+    try {
+      return this.compression.inflate(packed, this.plaintextWindow.snapshot())
+    } catch (error) {
+      // A decompression failure means the plaintext windows have diverged;
+      // the only safe state is a closed channel.
+      throw new Error('Secure message decompression failed; the channel must close.', { cause: error })
+    }
   }
 
   reset(): void {
     this.nextMessageId = 1
     this.assemblies.clear()
+    this.plaintextWindow.reset()
   }
 }
 
@@ -1453,6 +1663,14 @@ function isSecureFragment(frame: Uint8Array): boolean {
   if (frame.byteLength < SECURE_FRAGMENT_MAGIC.byteLength) return false
   for (let index = 0; index < SECURE_FRAGMENT_MAGIC.byteLength; index += 1) {
     if (frame[index] !== SECURE_FRAGMENT_MAGIC[index]) return false
+  }
+  return true
+}
+
+function isSecureCompressedFrame(frame: Uint8Array): boolean {
+  if (frame.byteLength < SECURE_COMPRESSED_MAGIC.byteLength) return false
+  for (let index = 0; index < SECURE_COMPRESSED_MAGIC.byteLength; index += 1) {
+    if (frame[index] !== SECURE_COMPRESSED_MAGIC[index]) return false
   }
   return true
 }

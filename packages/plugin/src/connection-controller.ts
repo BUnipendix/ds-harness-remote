@@ -19,6 +19,12 @@ export interface PeerConnectionContext {
   transportMode?: () => AuthenticatedPeerChannel['mode']
   connectionId: string
   peerDeviceId: string
+  /**
+   * Enables secure-message compression on this connection's channel (DSHZ
+   * frames, `harness.remote.compress.v1`). Present only when the channel
+   * supports it; the RpcRouter advertises the capability exactly then.
+   */
+  setCompression?: (enabled: boolean) => void
 }
 
 export interface ConnectedPeer {
@@ -89,7 +95,16 @@ export class ConnectionController {
     await Promise.all(replaced.map(connection => this.disconnect(connection, 'CONNECTION_REPLACED')))
 
     const router = this.createRouter(
-      { connectionId, peerDeviceId: channel.peerDeviceId, transportMode: () => channel.mode },
+      {
+        connectionId,
+        peerDeviceId: channel.peerDeviceId,
+        transportMode: () => channel.mode,
+        setCompression: channel.enableCompression === undefined
+          ? undefined
+          : enabled => {
+              if (enabled) channel.enableCompression?.()
+            },
+      },
       message => this.sendTo(connectionId, channel, message),
     )
     const connection: ActiveConnection = {

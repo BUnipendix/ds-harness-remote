@@ -17,4 +17,11 @@ export interface AuthenticatedPeerChannel {
   send(message: RemoteMessage): Promise<void>
   onMessage(handler: (message: RemoteMessage) => void): () => void
   close(code?: string): Promise<void>
+  /**
+   * Enables secure-message compression (DSHZ frames) for this connection,
+   * after the peer negotiated `harness.remote.compress.v1` via
+   * `remote.compression.configure`. Optional: channels built without a
+   * compressor never advertise the capability.
+   */
+  enableCompression?(): void
 }

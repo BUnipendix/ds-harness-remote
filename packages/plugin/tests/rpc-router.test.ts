@@ -307,6 +307,52 @@ describe('RpcRouter', () => {
   })
 })
 
+describe('RpcRouter secure-message compression', () => {
+  function routerWithCompression(hook?: (enabled: boolean) => void): RpcRouter {
+    // Slots: maxPending, logger, fileViewer, harnessRemote, capabilities,
+    // codex, acp, loopback, workspaceTypes, pluginRoute, workspaceUpload,
+    // setCompression.
+    return new RpcRouter(undefined, undefined, undefined, undefined, () => [], undefined, undefined,
+      undefined, undefined, undefined, undefined, hook)
+  }
+
+  it('advertises the compress capability only when the connection can flip its codec', async () => {
+    const withHook = await routerWithCompression(() => undefined).handle(
+      createRpcRequest('harness.transport.describe', {}))
+    expect(withHook).toMatchObject({
+      type: 'rpc.response',
+      payload: { result: { capabilities: expect.arrayContaining(['harness.remote.compress.v1']) } },
+    })
+
+    const withoutHook = await routerWithCompression().handle(
+      createRpcRequest('harness.transport.describe', {}))
+    const capabilities = (withoutHook as { payload: { result: { capabilities: string[] } } }).payload.result.capabilities
+    expect(capabilities).not.toContain('harness.remote.compress.v1')
+  })
+
+  it('enables compression on the connection when configured', async () => {
+    const hook = vi.fn()
+    const response = await routerWithCompression(hook).handle(
+      createRpcRequest('remote.compression.configure' as Parameters<typeof createRpcRequest>[0], { enabled: true }))
+    expect(response).toMatchObject({ type: 'rpc.response', payload: { result: { enabled: true } } })
+    expect(hook).toHaveBeenCalledWith(true)
+  })
+
+  it('answers disabled configure as a no-op without touching the channel', async () => {
+    const hook = vi.fn()
+    const response = await routerWithCompression(hook).handle(
+      createRpcRequest('remote.compression.configure' as Parameters<typeof createRpcRequest>[0], { enabled: false }))
+    expect(response).toMatchObject({ type: 'rpc.response', payload: { result: { enabled: false } } })
+    expect(hook).not.toHaveBeenCalled()
+  })
+
+  it('refuses compression on a connection that cannot support it', async () => {
+    const response = await routerWithCompression().handle(
+      createRpcRequest('remote.compression.configure' as Parameters<typeof createRpcRequest>[0], { enabled: true }))
+    expect(response).toMatchObject({ type: 'rpc.error', payload: { code: 'FEATURE_NOT_SUPPORTED' } })
+  })
+})
+
 function createRouter(
   overrides: Record<string, unknown> = {},
   fileViewer?: RemoteFileViewerBridge,

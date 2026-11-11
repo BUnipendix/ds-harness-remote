@@ -155,6 +155,8 @@ export class HostPluginRuntime {
           threadId => this.codex.resolveThreadWorkspace(context.connectionId, threadId),
           sessionId => this.acp.resolveUploadWorkspace(context.connectionId, sessionId),
         ), undefined, context.transportMode),
+        // Per-connection compression switch (harness.remote.compress.v1).
+        context.setCompression,
       )
     }, this.logger)
     if (config.serverUrl !== undefined) {

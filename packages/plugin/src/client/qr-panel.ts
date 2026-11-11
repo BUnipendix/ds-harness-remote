@@ -5,6 +5,9 @@ import type { ClientReact } from './types.js'
 /** Seconds the comparison code stays locked so it cannot be clicked past. */
 const COMPARE_DWELL_SECONDS = 8
 
+/** Regenerate the offer this long before its TTL ends so the QR never dies. */
+const PAIR_REGENERATION_MARGIN_MS = 30_000
+
 interface PendingPairing {
   peerDeviceId: string
   code: string
@@ -42,6 +45,7 @@ export function createPairingPanel(React: ClientReact) {
     const [busy, setBusy] = React.useState(false)
     const [notice, setNotice] = React.useState<LocalizedMessage | undefined>(undefined)
     const [error, setError] = React.useState<string | undefined>(undefined)
+    const generatingRef = React.useRef(false)
 
     const readPending = async (): Promise<void> => {
       const next = await props.control<PendingPairing | null>('host.pair.status')
@@ -56,6 +60,23 @@ export function createPairingPanel(React: ClientReact) {
         .catch(() => undefined)
       return () => { active = false }
     }, [open])
+
+    // An expanded panel always shows a live offer: generate on open and
+    // regenerate before the TTL ends, instead of waiting for the button.
+    // The button stays as a manual retry after a failure.
+    React.useEffect(() => {
+      if (!open || props.disabled === true || busy || generatingRef.current) return
+      let active = true
+      const regenerateIn = image === undefined || expiresAt === undefined
+        ? 0
+        : expiresAt - Date.now() - PAIR_REGENERATION_MARGIN_MS
+      const timer = setTimeout(() => {
+        if (!active || generatingRef.current) return
+        generatingRef.current = true
+        void begin().finally(() => { generatingRef.current = false })
+      }, Math.max(0, regenerateIn))
+      return () => { active = false; clearTimeout(timer) }
+    }, [open, image, expiresAt, busy, props.disabled])
 
     // Poll while an offer is live so a Controller that connects is noticed.
     React.useEffect(() => {

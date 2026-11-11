@@ -610,6 +610,18 @@ channel 内按 messageId 重组，最多接受 4 MiB 的完整消息和 8 个并
 长度不一致或超限必须关闭 secure channel。小消息继续直接使用 Remote message JSON，
 保持兼容和低开销。
 
+协商 `harness.remote.compress.v1`（见 §17）后，发送方可改用 DSHZ 帧：`DSHZ` magic、
+1-byte version、32-bit messageId、16-bit index、16-bit total、32-bit totalBytes、
+1-byte flags 和最多 48 KiB payload，分片/重组/上限规则与 DSHF 相同，但 `total >= 1` 允许单帧消息。
+flags 目前仅 bit0（deflated）：置位时 payload 是 zlib 格式 deflate（2 字节头 + adler32；
+不用 raw 格式，dart:io 在 raw 模式下静默忽略 preset dictionary），以**本方向最近 32 KiB 明文**
+（按 wire 顺序、成功编码/解码的每条消息，无论是否压缩）作为 preset dictionary；
+未置位时 payload 原样存放（不足 512 字节或压缩无收益时）。
+字典从不上线：两端各自从已持有的明文重建，真实通讯内容因此不出现在任何出厂产物中。
+解压失败意味着明文窗口失步，必须立即关闭 secure channel。
+帧以 magic 自描述，DSHF/raw 与 DSHZ 可任意混存，两端启用压缩的时序不需要同步屏障；
+未协商该能力的实现只收发 DSHF/raw，行为与历史版本逐字节一致。
+
 每方向维护独立 nonce/counter。重复、过旧、认证失败、超限或连接不匹配 frame 必须关闭 secure channel。达到 Noise 实现建议的消息/字节阈值时 rekey 或重建 connection。
 
 `fixtures/crypto/v1/noise-ik.json` 固定双方 static key、ephemeral private key、prologue、握手消息、
@@ -913,6 +925,14 @@ Host handshake 的 capability 例子：
 Typert Host 必须只宣告与本机 Session wire 对应的一项：v0.1.2 使用
 `harness.remote.v1`，v0.1.5 rc.1 使用 `harness.remote.v3`；禁止同时宣告两项。旧 Host 返回
 `METHOD_NOT_FOUND` 时，当前 Plugin Client 与 Android 必须拒绝连接，不得按版本号推测 ApiProxy 能力。
+
+支持 `harness.remote.compress.v1` 的 Host 在 `harness.transport.describe` 中宣告该能力，
+且仅当当前连接的 secure channel 支持压缩时宣告。Client 确认后发送加密 RPC
+`remote.compression.configure`，Params 为严格的 `{ "enabled": boolean }`，Result 回显
+`{ "enabled": boolean }`；`enabled=true` 使本连接两个方向的 secure message 改用 DSHZ 帧
+（算法与失败语义见 §12.3）。能力字符串钉死全部参数：zlib 格式 deflate、滚动 32 KiB 明文字典、
+512 字节压缩阈值；任何参数变更必须发布新能力串。未声明该能力的 Host 不得收到此 RPC，
+声明前后的 DSHF/raw 帧语义不变。压缩不改变 RPC/事件载荷语义，只作用于 secure message 传输层。
 
 支持 `remote.history.compact.v1` 的 Host 接受加密 RPC `remote.history.configure`，
 Params 为严格的 `{ "compact": boolean }`，Result 回显 `{ "compact": boolean }`。
