@@ -1,5 +1,13 @@
 # TODO
 
+## PR #384：Linux 单机凭据刷新与迁移
+
+- [x] 默认目录迁移与刷新共用闸门。迁移清理死亡 Holder，识别队列 `.tmp`。
+- [x] 文档说明 V2 Marker、0.6.3 降级步骤和平台范围。
+- [x] Linux 测试覆盖多进程刷新、强杀 Holder、死亡 Holder 迁移和硬链接失败。
+- [x] CI 在本地 XFS 挂载上验证硬链接，并通过凭据锁与迁移测试。
+- [ ] Windows Harness Host 在实际 Electron 44.7.0 / Node 24.21.0 环境验收。
+
 更新日期：2026-11-05。当前源码版本为 `0.6.3`，Android `versionCode 71`，Expo iOS `buildNumber 71`；Tag、npm 与 GitHub Release 状态以实际发布结果为准。
 
 最近一次构建验证见 [AGENTS.md 的 0.5.20 合并后重建记录](../AGENTS.md#post-merge-0520-rebuild-2026-10-27)：全仓 check、847 tests、串行生产 build（含 Android Hermes）、DSH bundle 与打包检查通过。这是既有验证记录，本轮文档清理未重新运行；未新增 APK、原生真机或跨设备验收。Metro noble/hashes exports fallback 警告仍保留。
@@ -240,8 +248,8 @@ Codex 属于同一个 Remote Plugin，但在 Plugin 内保持独立业务领域�
 本地集成验证不替代真实跨设备验收。
 
 - [ ] 将 `packages/protocol` 与 `docs/protocol.md` 的 Control、Account Authorization、Connect、Relay、ApiProxy tunnel、Error 和 Limits schema 逐项对齐
-- [ ] 拒绝原始 JSON 中重复的安全字段。分别核对 Control 与 REST 入口。
-- [ ] 对齐 Connect 公钥格式与 Handshake/Relay 的规范 Base64URL 校验。
+- [x] 拒绝原始 JSON 中重复的安全字段。Control、Relay 和自部署 Server REST 入口均拒绝转义后重复的字段名。
+- [x] 对齐 Connect 公钥格式与 Handshake/Relay 的规范 Base64URL 校验。共享 schema 和 conformance fixtures 覆盖无 padding 与尾部闲置位。
 - [ ] 明确握手 step、heartbeat 数值与标识符范围。同步 schema 和共享 fixtures。
 - [ ] 清理协议第 22 节的 `connection.ping` 冲突说明。区分 replay/rekey 目标与实现状态。
 - [x] 清理仅供冻结 Android 原型使用的旧 Session/Event 类型（PR #54, commit 5304fcd + 8ad988b）
@@ -268,10 +276,10 @@ Codex 属于同一个 Remote Plugin，但在 Plugin 内保持独立业务领域�
 - [ ] Relay padding、counter 混淆与心跳抖动，降低流量分析价值。
 - [ ] Remote Web 前端改由独立 origin 或浏览器扩展分发，脱离 Server 静态资源信任域。
 - [ ] 核对断线密钥清理。补齐清理策略与核心测试。
-- [ ] 增加剩余协议 golden vectors
+- [ ] 增加剩余协议 golden vectors。Control 全部帧类型、Relay data envelope 和 Noise IK 已覆盖；Typert、CodeX 与 ACP tunnel 仍需逐项补齐。
 - [x] 增加 Noise IK golden vector
 - [x] 补齐 counter 安全整数边界与 Control/Relay frame limit 测试
-- [ ] 补齐真实 Relay 链路的篡改、重放和错误 identity 跨层验证
+- [x] 补齐真实 Relay 链路的篡改、重放和错误 identity 跨层验证。Server/WebSocket、Noise IK 和生产 ClientSecureTransport 集成测试覆盖这些路径。
 - [x] WSL 本地 Server/WebSocket 验证密文篡改与提高 counter 后的重放拒绝。
 - [x] WSL 本地 Relay 验证错误静态公钥与连接 prologue 的 Noise 握手拒绝。
 
@@ -405,3 +413,7 @@ Typert Remote contract，不得在 Plugin Host 恢复 `sessions.*`、`session.se
 
 - [x] AGY 工作区/会话 catalog、空白新会话、历史/图片、流式、标题刷新与重连恢复
 - [ ] Android AGY APK 与真机/加密跨设备回归；每目录超过 100 个会话的分页体验
+
+## DSH-Go pairing acceptance
+
+Implement Dart mobile proof vectors, scanner/credential integration and Android end-to-end acceptance using docs/dsh-go-pairing-integration.md. C# Server/Remote integration uses a simulated Node phone, not an Android build. Local UI and `isTrusted` cannot establish genuine human presence against OS automation; use a trusted native primitive if Harness makes one available. No deployment/release is included.

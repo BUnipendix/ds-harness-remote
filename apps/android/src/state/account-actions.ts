@@ -30,6 +30,7 @@ import {
   loadServerConfig,
   loadThemePreference,
   loadTypographyDensity,
+  loadActivityDockMode,
   loadStatusBarVisible,
   loadTransportPreference,
   loadTrustedHosts,
@@ -42,6 +43,7 @@ import {
   saveServerConfig,
   saveThemePreference,
   saveTypographyDensity,
+  saveActivityDockMode,
   saveStatusBarVisible,
 } from '../services/storage'
 import type { ServerConfig, WorkspaceShortcut } from '../types'
@@ -56,6 +58,7 @@ export function createAccountActions({ set, get }: StoreAccess): AccountActions 
   let accountGeneration = 0
   let refreshGeneration = 0
   let accountChanges = 0
+  let lastDirectoryError: string | undefined
   let effects: Promise<unknown> = Promise.resolve()
 
   // Credential refresh and directory cleanup can write SecureStore. Account
@@ -105,13 +108,14 @@ export function createAccountActions({ set, get }: StoreAccess): AccountActions 
     async bootstrap() {
       set({ bootPhase: 'loading', error: undefined, pendingAutoConnectDeviceId: undefined, reauthRequired: false })
       try {
-        const [config, identity, transportPreference, languagePreference, themePreference, typographyDensity, statusBarVisible, favoriteWorkspaces, recentWorkspaces, lastConnectedDeviceId, defaultPermissionPreset, compactHistory] = await Promise.all([
+        const [config, identity, transportPreference, languagePreference, themePreference, typographyDensity, activityDockMode, statusBarVisible, favoriteWorkspaces, recentWorkspaces, lastConnectedDeviceId, defaultPermissionPreset, compactHistory] = await Promise.all([
           loadServerConfig(),
           loadOrCreateIdentity(),
           loadTransportPreference(),
           loadLanguagePreference(),
           loadThemePreference(),
           loadTypographyDensity(),
+          loadActivityDockMode(),
           loadStatusBarVisible(),
           loadFavoriteWorkspaces(),
           loadRecentWorkspaces(),
@@ -129,6 +133,7 @@ export function createAccountActions({ set, get }: StoreAccess): AccountActions 
           language,
           themePreference,
           typographyDensity,
+          activityDockMode,
           statusBarVisible,
           compactHistory,
           defaultPermissionPreset,
@@ -379,6 +384,16 @@ export function createAccountActions({ set, get }: StoreAccess): AccountActions 
           }
         })
         if (!current()) return
+        const failedIds = new Set(result.lookupFailedDeviceIds ?? [])
+        const mismatchCount = result.keyMismatchDeviceIds?.length ?? 0
+        const allLookupsFailed = failedIds.size > 0 && result.devices.every(device => failedIds.has(device.deviceId))
+        const directoryError = mismatchCount > 0
+          ? zhCN.devices.identityChangedError
+          : allLookupsFailed
+            ? friendlyError(result.lookupError ?? new Error(zhCN.devices.loadFailed))
+            : undefined
+        const previousDirectoryError = lastDirectoryError
+        lastDirectoryError = directoryError
         set(state => ({
           devices: result.devices,
           selectedDevice: state.selectedDevice === undefined ? undefined : {
@@ -386,6 +401,11 @@ export function createAccountActions({ set, get }: StoreAccess): AccountActions 
             name: result.devices.find(device => device.deviceId === state.selectedDevice?.deviceId)?.name ?? state.selectedDevice.name,
           },
           refreshing: false,
+          ...(directoryError !== undefined
+            ? { error: directoryError }
+            : state.error !== undefined && state.error === previousDirectoryError
+              ? { error: undefined }
+              : {}),
         }))
       } catch (error) {
         if (!current()) return
@@ -393,7 +413,9 @@ export function createAccountActions({ set, get }: StoreAccess): AccountActions 
           await get().requireReauth(friendlyError(error))
           return
         }
-        set({ refreshing: false, error: friendlyError(error) })
+        const message = friendlyError(error)
+        lastDirectoryError = message
+        set({ refreshing: false, error: message })
       }
     },
 
@@ -507,6 +529,7 @@ export function createAccountActions({ set, get }: StoreAccess): AccountActions 
         language,
         themePreference: 'system',
         typographyDensity: 'compact',
+        activityDockMode: 'compact',
         statusBarVisible: true,
         compactHistory: false,
         defaultPermissionPreset: 'default',
@@ -518,7 +541,7 @@ export function createAccountActions({ set, get }: StoreAccess): AccountActions 
     },
 
     async signOut() {
-      const { config, identity, languagePreference, themePreference, typographyDensity, statusBarVisible, defaultPermissionPreset, compactHistory } = get()
+      const { config, identity, languagePreference, themePreference, typographyDensity, activityDockMode, statusBarVisible, defaultPermissionPreset, compactHistory } = get()
       await get().disconnect()
       await clearBrowseMemory()
       if (config !== undefined && identity !== undefined) {
@@ -533,6 +556,7 @@ export function createAccountActions({ set, get }: StoreAccess): AccountActions 
       await saveLanguagePreference(languagePreference)
       await saveThemePreference(themePreference)
       await saveTypographyDensity(typographyDensity)
+      await saveActivityDockMode(activityDockMode)
       await saveStatusBarVisible(statusBarVisible)
       await saveCompactHistory(compactHistory)
       await saveDefaultPermissionPreset(defaultPermissionPreset)

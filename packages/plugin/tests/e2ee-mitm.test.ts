@@ -35,6 +35,7 @@ function config(requireVerifiedPeer: boolean): ResolvedConfig {
     deviceName: 'Client',
     forceRelay: true,
     rotatePinnedPeerKey: false,
+    httpServerAllowlist: [],
     sidebar: { entry: 'standard' },
     identity: { requireVerifiedPeer },
     logLevel: 'error',
